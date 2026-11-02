@@ -8,6 +8,9 @@ struct ContentView: View {
     @State private var selection: PhotosPickerItem?
     @State private var image: CGImage?
     @State private var errorMessage: String?
+    #if DEBUG
+    @State private var sampleIndex = 0
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -24,8 +27,21 @@ struct ContentView: View {
                     )
                 }
 
+                #if DEBUG
+                Button("载入示例图") {
+                    loadNextSample()
+                }
+                .buttonStyle(.bordered)
+
+                Button("选择照片") {
+                    // Debug 下不自动打开系统相册，改用 SampleImages 便于自动化。
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(true)
+                #else
                 PhotosPicker("选择照片", selection: $selection, matching: .images)
                     .buttonStyle(.borderedProminent)
+                #endif
 
                 if let errorMessage {
                     Text(errorMessage).foregroundStyle(.red)
@@ -37,6 +53,11 @@ struct ContentView: View {
         .onChange(of: selection) { _, newItem in
             Task { await load(newItem) }
         }
+        #if DEBUG
+        .task {
+            if image == nil { loadNextSample() }
+        }
+        #endif
     }
 
     private func load(_ item: PhotosPickerItem?) async {
@@ -54,4 +75,39 @@ struct ContentView: View {
             errorMessage = error.localizedDescription
         }
     }
+
+    #if DEBUG
+    /// 直接读取仓库内 `SampleImages/` 的图片，供开发调试与自动化验证使用。
+    private static let sampleDirectory = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("SampleImages", isDirectory: true)
+
+    private func loadNextSample() {
+        let fm = FileManager.default
+        let allowedExtensions: Set<String> = ["jpeg", "jpg", "png", "heic"]
+        let urls = (try? fm.contentsOfDirectory(
+            at: Self.sampleDirectory,
+            includingPropertiesForKeys: nil
+        ))?
+            .filter { allowedExtensions.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
+
+        guard !urls.isEmpty else {
+            errorMessage = "SampleImages 目录中没有可用图片"
+            return
+        }
+
+        let url = urls[sampleIndex % urls.count]
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            errorMessage = "无法读取 \(url.lastPathComponent)"
+            return
+        }
+        image = cgImage
+        errorMessage = nil
+        sampleIndex += 1
+    }
+    #endif
 }

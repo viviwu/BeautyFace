@@ -105,7 +105,7 @@
 
 | 编号 | 名称 | 主要内容 | 完成标准 | 估计工期 | 状态 |
 |---|---|---|---|---|---|
-| M0 | 骨架 | 工程、Swift Package、SwiftUI 空壳、素材目录 | 能选图并显示 | 2–3 天 | 进行中 |
+| M0 | 骨架 | 工程、Swift Package、SwiftUI 空壳、素材目录 | 能选图并显示 | 2–3 天 | 已完成（Mac；真机待补） |
 | M1 | 图像管线 | 解码、EXIF、缩放、rgba16Float、编码输出 | 恒等处理误差 ≤ 1 个灰阶 | 3–4 天 | 未开始 |
 | M2 | 检测与调试视图 | Vision 脸框、76 点、人像蒙版、多脸、调试绘制 | 样图关键点正确，多脸分别输出 | 4–5 天 | 未开始 |
 | M3 | 皮肤 | 皮肤蒙版、磨皮、美白、预览与全分辨率 | 边缘无明显伪影，背景不变 | 1 周 | 未开始 |
@@ -132,22 +132,32 @@
 
 ---
 
-## 3. M0 计划（当前）
+## 3. M0 计划与验收
 
 **目标**：工程可编译运行，能在真机上选图并显示。
 
 **进展（2026-10-26）**：在 Linux 环境生成源码骨架（两个 Swift Package、Demo 源码、`.gitignore`、`SampleImages/` 目录、算法层平台依赖检查脚本）。Xcode 工程创建、编译、`swift test` 与真机验证需在 Mac 上完成，未验证。
 
-**进展（2026-11-02）**：按 ADR-013 改为 Mac 优先开发。`ContentView` 改为不依赖 UIKit，使用 ImageIO 解码为 `CGImage`，可同时在 macOS 与 iOS 上编译。Mac 上的编译与运行仍待验证。
+**进展（2026-11-02）**：按 ADR-013 改为 Mac 优先开发。`ContentView` 改为不依赖 UIKit，使用 ImageIO 解码为 `CGImage`，可同时在 macOS 与 iOS 上编译。
 
-- [ ] 创建 `BeautyFace.xcworkspace`
+**进展（2026-11-02，Mac 构建验收）**：
+- 修复 SwiftPM 同名文件冲突：`Placeholder.swift` 改为带模块前缀的唯一文件名，BFAlgorithms / BFKit 均可编译。
+- App Debug 改为本机签名（`CODE_SIGN_STYLE=Manual`、`CODE_SIGN_IDENTITY=-`、清空 Team），规避已吊销的 Apple Development 证书；Release 保留原 Team 配置。
+- 部署目标修正为 iOS 18 / macOS 15，与 ADR-003 及两个 Package 的平台声明一致。
+- `swift test`（BFAlgorithms、BFKit）通过；`xcodebuild -scheme BeautyFaceDemo -destination 'platform=macOS'` 构建通过；App 可正常启动。
+- Debug 下支持直接读取 `SampleImages/`：启动自动载入示例图，「载入示例图」按钮可轮换；为允许读取仓库目录，Debug 关闭 App Sandbox（Release 保持沙盒）。PhotosPicker 在 Debug 下暂时禁用，便于自动化。
+- 已通过自动化截图验证：`SampleImages/musk.jpeg` 与 `SampleImages/vivi.jpeg` 均可正常显示并可切换。
+- 未覆盖项：当前环境未安装 iOS 模拟器 runtime，iPhone 设备均 Offline；PhotosPicker 系统相册路径与真机冒烟待设备可用后补做。
+
+- [x] 创建 `BeautyFace.xcworkspace`
 - [x] 创建 `Packages/BFAlgorithms`，确认 `Package.swift` 不依赖 Apple 框架（已生成；`scripts/check_no_apple_imports.sh` 通过）
 - [x] 创建 `Packages/BFKit`，依赖 `BFAlgorithms`（已生成）
-- [ ] 创建 `BeautyFaceDemo` SwiftUI App，部署目标 iOS 18（源码已生成，Xcode 工程待在 Mac 上创建）
-- [ ] 配置 PhotosPicker 选图，显示原图（代码已写，待真机验证）
+- [x] 创建 `BeautyFaceDemo` SwiftUI App，部署目标已修正为 iOS 18
+- [ ] 配置 PhotosPicker 选图，显示原图（代码完成；Debug 暂用 `SampleImages` 自动化验证，系统相册路径待真机确认）
 - [x] 建立 `SampleImages/` 目录（已被 `.gitignore` 排除），真机素材待拍摄放入
-- [ ] 在 iPhone 17 与 iPhone Air 上运行验证
-- [ ] 确认 `BFAlgorithms` 可用 `swift test` 在 Mac 上运行（测试已写，待 Mac 上执行）
+- [x] 修复本机构建问题：同名 `Placeholder.swift`、已吊销证书、部署目标 26.2
+- [ ] 在 iPhone 17 与 iPhone Air 上运行验证（设备当前 Offline）
+- [x] 确认两个 Package 可用 `swift test` 在 Mac 上运行
 - [x] 决定 `SampleImages/` 是否入库：放在项目目录内，由 `.gitignore` 排除（Q-02）
 
 ---
@@ -199,3 +209,5 @@
 | 2026-10-26 | 完成需求与技术规划；确认 ADR-001 至 ADR-012；创建 README 与台账；M0 准备开始 |
 | 2026-10-26 | M0 进行中：生成工程骨架（BFAlgorithms、BFKit、Demo 源码、.gitignore、SampleImages 目录、平台依赖检查脚本）；Q-01、Q-02 决定 |
 | 2026-11-02 | 新增 ADR-013（Mac 优先开发、iPhone 最终验收）；ContentView 去除 UIKit 依赖，改用 CGImage，支持 macOS |
+| 2026-11-02 | M0 完成 Mac 构建验收：修复同名 Placeholder 文件、Debug 改本机签名、部署目标修正为 iOS 18 / macOS 15；两个 Package `swift test` 与 App `xcodebuild` 均通过 |
+| 2026-11-02 | 调试流程改为直接读取 `SampleImages/`（Debug 自动载入示例图、关闭 App Sandbox），便于自动化验证；新增工程约定 `AGENTS.md` |

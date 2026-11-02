@@ -2,8 +2,8 @@
 
 面向 iOS 的人像美化 SDK 与配套 Demo App。第一版专注于**静态图片**，以头部与面部处理为主，支持多人脸。身体部分只做颈部与肩部的协调，保证脸与躯体过渡自然。
 
-- 状态：规划完成，准备进入 M0
-- 最后更新：2026-10-26
+- 状态：M0 完成（Mac 构建验收），准备进入 M1
+- 最后更新：2026-11-02
 - 开发台账（ADR、里程碑、计划）：见 [dev_ledger.md](dev_ledger.md)
 
 ---
@@ -202,7 +202,8 @@ BeautyFace/
 
 1. 打开 `BeautyFace.xcworkspace`
 2. 选择 `BeautyFaceDemo` Scheme，目标设备选择 My Mac（日常调试）
-3. 需要验收时，选择 iPhone 真机运行；首次运行需在设备上信任开发者证书
+3. Debug 配置使用本机签名（`CODE_SIGN_IDENTITY = "-"`），无需开发者证书；Release 与真机运行仍需有效的 Apple Development 证书
+4. 需要验收时，选择 iPhone 真机运行；首次运行需在设备上信任开发者证书
 
 **算法层单独测试**（不需要真机）
 

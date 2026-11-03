@@ -150,16 +150,16 @@ public final class SkinRenderer {
             float baseLuma = dot(base.rgb, lumaWeights);
             float sourceLuma = dot(source.rgb, lumaWeights);
             float dip = baseLuma - sourceLuma;
-            float spot = smoothstep(0.020, 0.070, dip) * blemishWeight;
+            float spot = smoothstep(0.030, 0.095, dip) * blemishWeight;
 
             if (spot > 0.0) {
-                float gain = clamp(baseLuma / max(sourceLuma, 1e-3), 1.0, 1.45);
+                float gain = clamp(baseLuma / max(sourceLuma, 1e-3), 1.0, 1.22);
                 color = color * mix(1.0, gain, 0.90 * spot);
 
                 // 色度向邻域收敛，去掉痘印的偏红，同时不改动亮度。
                 float3 baseChroma = base.rgb - baseLuma;
                 float3 sourceChroma = source.rgb - sourceLuma;
-                color = color + (baseChroma - sourceChroma) * (0.70 * spot);
+                color = color + (baseChroma - sourceChroma) * (0.45 * spot);
             }
         }
 

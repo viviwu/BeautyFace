@@ -175,6 +175,96 @@ final class SkinMaskTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(mask.value(x: 20, y: 20)), 0.9)
     }
 
+    /// 暖白色衣物与偏暖肤色的 Cb/Cr 都落在传统肤色带内，
+    /// 必须靠「人脸肤色参考 + 亮度归一化色度距离」区分。
+    func testWarmWhiteClothingIsNotSkin() throws {
+        // 取自真实照片 IMG_0789.HEIC 的实测值
+        let skinColor: (UInt8, UInt8, UInt8) = (179, 107, 87)
+        let shadowColor: (UInt8, UInt8, UInt8) = (107, 64, 52)   // 同一肤色压暗 40%
+        let clothingColor: (UInt8, UInt8, UInt8) = (189, 158, 135)
+
+        let image = try TestSupport.makeImage(width: 200, height: 200) { _, y in
+            switch y {
+            case 20..<70:
+                return (skinColor.0, skinColor.1, skinColor.2, 255)
+            case 70..<110:
+                return (shadowColor.0, shadowColor.1, shadowColor.2, 255)
+            case 130..<200:
+                return (clothingColor.0, clothingColor.1, clothingColor.2, 255)
+            default:
+                return (30, 60, 120, 255)
+            }
+        }
+
+        let landmarks = FaceLandmarks(
+            allPoints: [],
+            faceContour: [],
+            leftEye: [
+                CGPoint(x: 0.38, y: 0.74),
+                CGPoint(x: 0.42, y: 0.76),
+                CGPoint(x: 0.46, y: 0.74),
+                CGPoint(x: 0.42, y: 0.72),
+            ],
+            rightEye: [
+                CGPoint(x: 0.54, y: 0.74),
+                CGPoint(x: 0.58, y: 0.76),
+                CGPoint(x: 0.62, y: 0.74),
+                CGPoint(x: 0.58, y: 0.72),
+            ],
+            leftEyebrow: [],
+            rightEyebrow: [],
+            nose: [],
+            noseCrest: [],
+            medianLine: [],
+            outerLips: [
+                CGPoint(x: 0.42, y: 0.50),
+                CGPoint(x: 0.50, y: 0.53),
+                CGPoint(x: 0.58, y: 0.50),
+                CGPoint(x: 0.50, y: 0.47),
+            ],
+            innerLips: [],
+            leftPupil: [],
+            rightPupil: []
+        )
+        let face = FaceObservation(
+            boundingBox: CGRect(x: 0.20, y: 0.45, width: 0.60, height: 0.45),
+            roll: nil,
+            yaw: nil,
+            confidence: 1,
+            landmarks: landmarks
+        )
+        let detection = DetectionResult(
+            imageSize: CGSize(width: 200, height: 200),
+            faces: [face],
+            personMask: SegmentationMask(
+                width: 100,
+                height: 100,
+                pixels: [UInt8](repeating: 255, count: 100 * 100)
+            )
+        )
+
+        let mask = try SkinMaskGenerator(
+            targetLongEdge: 200,
+            featherRadius: 0
+        ).generate(image: image, detection: detection)
+
+        XCTAssertGreaterThan(
+            try XCTUnwrap(mask.value(x: 60, y: 40)),
+            0.9,
+            "受光肤色应当被识别"
+        )
+        XCTAssertGreaterThan(
+            try XCTUnwrap(mask.value(x: 60, y: 90)),
+            0.9,
+            "同一肤色压暗后仍应被识别（亮度归一化应对阴影不敏感）"
+        )
+        XCTAssertLessThan(
+            try XCTUnwrap(mask.value(x: 100, y: 170)),
+            0.1,
+            "暖白色衣物不应算作皮肤"
+        )
+    }
+
     func testSampleImageMaskIsLocalizedWhenAvailable() throws {
         let url = try TestSupport.sampleImageURL(named: "musk.jpeg")
         let decoded = try ImageDecoder.decode(url: url)

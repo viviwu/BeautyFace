@@ -189,7 +189,7 @@ final class SkinRendererTests: XCTestCase {
             let dx = Double(x - spotCenter.x)
             let dy = Double(y - spotCenter.y)
             if (dx * dx + dy * dy).squareRoot() <= spotRadius {
-                return (150, 105, 80, 255)
+                return (138, 96, 74, 255)
             }
             return (214, 168, 138, 255)
         }
@@ -227,7 +227,7 @@ final class SkinRendererTests: XCTestCase {
             let dx = Double(x - spotCenter.x)
             let dy = Double(y - spotCenter.y)
             if (dx * dx + dy * dy).squareRoot() <= 5 {
-                return (150, 105, 80, 255)
+                return (138, 96, 74, 255)
             }
             return (214, 168, 138, 255)
         }

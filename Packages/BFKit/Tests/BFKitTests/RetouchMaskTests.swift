@@ -57,9 +57,12 @@ final class RetouchMaskTests: XCTestCase {
             CGPoint(x: 0.50, y: 0.98),
         ]
         for point in backgroundPoints {
-            XCTAssertEqual(value(mask.eye, mask.width, mask.height, at: point), 0)
-            XCTAssertEqual(value(mask.teeth, mask.width, mask.height, at: point), 0)
-            XCTAssertEqual(value(mask.darkCircle, mask.width, mask.height, at: point), 0)
+            XCTAssertLessThan(value(mask.eye, mask.width, mask.height, at: point), 1e-6)
+            XCTAssertLessThan(value(mask.teeth, mask.width, mask.height, at: point), 1e-6)
+            XCTAssertLessThan(
+                value(mask.darkCircle, mask.width, mask.height, at: point),
+                1e-6
+            )
         }
 
         // 额头中央同样不应出现任何局部修饰
@@ -83,9 +86,9 @@ final class RetouchMaskTests: XCTestCase {
     // MARK: - 真实素材冒烟
 
     func testSampleImagesProduceLocalizedMasks() throws {
-        for name in ["musk.jpeg", "vivi.jpeg"] {
+        for name in ["musk.jpeg", "IMG_0789.HEIC"] {
             let url = try TestSupport.sampleImageURL(named: name)
-            let decoded = try ImageDecoder.decode(url: url)
+            let decoded = try ImageDecoder.decode(url: url, maxLongEdge: 1024)
             let detection = try FaceDetector().detect(image: decoded.image)
             let skin = try SkinMaskGenerator(targetLongEdge: 512, featherRadius: 3)
                 .generate(image: decoded.image, detection: detection)

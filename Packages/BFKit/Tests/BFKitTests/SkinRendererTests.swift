@@ -116,6 +116,262 @@ final class SkinRendererTests: XCTestCase {
         XCTAssertEqual(output.height, image.height)
     }
 
+    // MARK: - 局部修饰
+
+    func testLocalRetouchOnlyAffectsMaskedRegion() throws {
+        let renderer = try makeRenderer()
+        let image = try TestSupport.makeImage(
+            width: 120,
+            height: 90,
+            pixel: { _, _ in (200, 155, 125, 255) }
+        )
+        let skinMask = SkinMask(
+            width: 60,
+            height: 45,
+            values: [Float](repeating: 1, count: 60 * 45)
+        )
+        let rect = CGRect(x: 8, y: 8, width: 10, height: 10)
+
+        let cases: [(BeautyParameters, RetouchMask, String)] = [
+            (
+                BeautyParameters(eyeBrightening: 1),
+                makeRectMask(width: 60, height: 45, eye: rect),
+                "亮眼"
+            ),
+            (
+                BeautyParameters(teethWhitening: 1),
+                makeRectMask(width: 60, height: 45, teeth: rect),
+                "白牙"
+            ),
+            (
+                BeautyParameters(darkCircleRemoval: 1),
+                makeRectMask(width: 60, height: 45, darkCircle: rect),
+                "去黑眼圈"
+            ),
+        ]
+
+        let source = try TestSupport.rgbaBytes(from: image)
+        for (parameters, retouch, label) in cases {
+            let output = try renderer.render(
+                image: image,
+                skinMask: skinMask,
+                retouchMask: retouch,
+                parameters: parameters
+            )
+            let bytes = try TestSupport.rgbaBytes(from: output)
+
+            let inside = luma(bytes, 120, x: 26, y: 26)
+            let outside = luma(bytes, 120, x: 100, y: 70)
+            let sourceInside = luma(source, 120, x: 26, y: 26)
+            let sourceOutside = luma(source, 120, x: 100, y: 70)
+
+            XCTAssertGreaterThan(
+                inside - sourceInside,
+                4,
+                "\(label)：蒙版内应当被提亮"
+            )
+            XCTAssertLessThanOrEqual(
+                abs(outside - sourceOutside),
+                2,
+                "\(label)：蒙版外不应变化"
+            )
+        }
+    }
+
+    func testBlemishRemovalHealsDarkSpot() throws {
+        let renderer = try makeRenderer()
+        let width = 120
+        let height = 90
+        let spotCenter = (x: 60, y: 45)
+        let spotRadius = 5.0
+
+        let image = try TestSupport.makeImage(width: width, height: height) { x, y in
+            let dx = Double(x - spotCenter.x)
+            let dy = Double(y - spotCenter.y)
+            if (dx * dx + dy * dy).squareRoot() <= spotRadius {
+                return (150, 105, 80, 255)
+            }
+            return (214, 168, 138, 255)
+        }
+        let skinMask = SkinMask(
+            width: 60,
+            height: 45,
+            values: [Float](repeating: 1, count: 60 * 45)
+        )
+
+        let output = try renderer.render(
+            image: image,
+            skinMask: skinMask,
+            parameters: BeautyParameters(blemishRemoval: 1)
+        )
+
+        let source = try TestSupport.rgbaBytes(from: image)
+        let bytes = try TestSupport.rgbaBytes(from: output)
+
+        let spotBefore = luma(source, width, x: spotCenter.x, y: spotCenter.y)
+        let spotAfter = luma(bytes, width, x: spotCenter.x, y: spotCenter.y)
+        XCTAssertGreaterThan(spotAfter - spotBefore, 12, "痘印应当被提亮")
+
+        let farBefore = luma(source, width, x: 12, y: 12)
+        let farAfter = luma(bytes, width, x: 12, y: 12)
+        XCTAssertLessThanOrEqual(abs(farAfter - farBefore), 2, "无瑕疵区域不应变化")
+    }
+
+    func testBlemishRemovalSurvivesWhitening() throws {
+        let renderer = try makeRenderer()
+        let width = 120
+        let height = 90
+        let spotCenter = (x: 60, y: 45)
+
+        let image = try TestSupport.makeImage(width: width, height: height) { x, y in
+            let dx = Double(x - spotCenter.x)
+            let dy = Double(y - spotCenter.y)
+            if (dx * dx + dy * dy).squareRoot() <= 5 {
+                return (150, 105, 80, 255)
+            }
+            return (214, 168, 138, 255)
+        }
+        let skinMask = SkinMask(
+            width: 60,
+            height: 45,
+            values: [Float](repeating: 1, count: 60 * 45)
+        )
+
+        let blemishOnly = try renderer.render(
+            image: image,
+            skinMask: skinMask,
+            parameters: BeautyParameters(blemishRemoval: 1)
+        )
+        let withWhitening = try renderer.render(
+            image: image,
+            skinMask: skinMask,
+            parameters: BeautyParameters(whitening: 1, blemishRemoval: 1)
+        )
+
+        let only = try TestSupport.rgbaBytes(from: blemishOnly)
+        let both = try TestSupport.rgbaBytes(from: withWhitening)
+        let source = try TestSupport.rgbaBytes(from: image)
+
+        // 美白会整体抬亮，但痘印处的「相对提亮量」不应被抵消
+        let spotGainOnly = luma(only, width, x: spotCenter.x, y: spotCenter.y)
+            - luma(source, width, x: spotCenter.x, y: spotCenter.y)
+        let referenceGain = luma(both, width, x: 12, y: 12)
+            - luma(source, width, x: 12, y: 12)
+        let spotGainBoth = luma(both, width, x: spotCenter.x, y: spotCenter.y)
+            - luma(source, width, x: spotCenter.x, y: spotCenter.y)
+
+        XCTAssertGreaterThan(spotGainOnly, 12)
+        XCTAssertGreaterThan(
+            spotGainBoth - referenceGain,
+            6,
+            "开启美白后痘印仍应相对被修复"
+        )
+    }
+
+    func testLocalRetouchKeepsBackgroundUnchanged() throws {
+        let renderer = try makeRenderer()
+        let skinRect = CGRect(x: 24, y: 18, width: 32, height: 24)
+        let image = try TestSupport.makeImage(
+            width: 80,
+            height: 60,
+            pixel: { x, y in
+                if skinRect.contains(CGRect(x: x, y: y, width: 1, height: 1)) {
+                    return (210, 160, 130, 255)
+                }
+                return (30, 80, 200, 255)
+            }
+        )
+
+        var skinValues = [Float](repeating: 0, count: 40 * 30)
+        for y in 9..<21 {
+            for x in 12..<28 {
+                skinValues[y * 40 + x] = 1
+            }
+        }
+        let skinMask = SkinMask(width: 40, height: 30, values: skinValues)
+        let retouch = makeRectMask(
+            width: 40,
+            height: 30,
+            eye: CGRect(x: 14, y: 11, width: 6, height: 5),
+            teeth: CGRect(x: 20, y: 11, width: 6, height: 5),
+            darkCircle: CGRect(x: 14, y: 17, width: 12, height: 4)
+        )
+
+        let output = try renderer.render(
+            image: image,
+            skinMask: skinMask,
+            retouchMask: retouch,
+            parameters: BeautyParameters(
+                smoothing: 1,
+                whitening: 1,
+                brightening: 1,
+                eyeBrightening: 1,
+                teethWhitening: 1,
+                darkCircleRemoval: 1,
+                blemishRemoval: 1
+            )
+        )
+        let source = try TestSupport.rgbaBytes(from: image)
+        let bytes = try TestSupport.rgbaBytes(from: output)
+
+        var maxBackgroundDifference = 0
+        for y in 0..<60 {
+            for x in 0..<80 {
+                let isSafeBackground = x < 18 || x >= 62 || y < 12 || y >= 48
+                guard isSafeBackground else { continue }
+                let offset = (y * 80 + x) * 4
+                for channel in 0..<3 {
+                    maxBackgroundDifference = max(
+                        maxBackgroundDifference,
+                        abs(Int(source[offset + channel]) - Int(bytes[offset + channel]))
+                    )
+                }
+            }
+        }
+        XCTAssertLessThanOrEqual(maxBackgroundDifference, 2)
+
+        let eyeCenter = (22 * 80 + 34) * 4
+        let eyeDifference = (0..<3).map {
+            abs(Int(source[eyeCenter + $0]) - Int(bytes[eyeCenter + $0]))
+        }.max() ?? 0
+        XCTAssertGreaterThan(eyeDifference, 8, "蒙版内应当有明显变化")
+    }
+
+    private func makeRectMask(
+        width: Int,
+        height: Int,
+        eye: CGRect? = nil,
+        teeth: CGRect? = nil,
+        darkCircle: CGRect? = nil
+    ) -> RetouchMask {
+        func fill(_ rect: CGRect?) -> [Float] {
+            var values = [Float](repeating: 0, count: width * height)
+            guard let rect else { return values }
+            for y in 0..<height {
+                for x in 0..<width {
+                    if rect.contains(CGRect(x: x, y: y, width: 1, height: 1)) {
+                        values[y * width + x] = 1
+                    }
+                }
+            }
+            return values
+        }
+        return RetouchMask(
+            width: width,
+            height: height,
+            eye: fill(eye),
+            teeth: fill(teeth),
+            darkCircle: fill(darkCircle)
+        )
+    }
+
+    private func luma(_ bytes: [UInt8], _ width: Int, x: Int, y: Int) -> Double {
+        let offset = (y * width + x) * 4
+        return 0.299 * Double(bytes[offset])
+            + 0.587 * Double(bytes[offset + 1])
+            + 0.114 * Double(bytes[offset + 2])
+    }
+
     private func makeRenderer() throws -> SkinRenderer {
         do {
             return try SkinRenderer()

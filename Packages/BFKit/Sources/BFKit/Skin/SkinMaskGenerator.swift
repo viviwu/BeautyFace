@@ -3,14 +3,11 @@ import Foundation
 
 public enum SkinMaskError: Error, LocalizedError {
     case invalidTargetSize
-    case cannotCreateContext
 
     public var errorDescription: String? {
         switch self {
         case .invalidTargetSize:
             return "皮肤蒙版目标尺寸无效"
-        case .cannotCreateContext:
-            return "无法创建皮肤蒙版上下文"
         }
     }
 }
@@ -43,7 +40,11 @@ public struct SkinMaskGenerator {
             throw SkinMaskError.invalidTargetSize
         }
 
-        let bytes = try rgbaBytes(from: image, width: size.width, height: size.height)
+        let bytes = try MaskImageRasterizer.rgbaBytes(
+            from: image,
+            width: size.width,
+            height: size.height
+        )
         var values = [Float](repeating: 0, count: size.width * size.height)
 
         let extra = 0.02 + 0.03 * tolerance
@@ -61,15 +62,25 @@ public struct SkinMaskGenerator {
                 let g = Float(bytes[offset + 1]) / 255
                 let b = Float(bytes[offset + 2]) / 255
 
-                let luma = 0.299 * r + 0.587 * g + 0.114 * b
+                let luma = MaskMath.luma(r: r, g: g, b: b)
                 let cb = -0.168736 * r - 0.331264 * g + 0.5 * b + 0.5
                 let cr = 0.5 * r - 0.418688 * g - 0.081312 * b + 0.5
-                let saturation = max(r, max(g, b)) - min(r, min(g, b))
+                let saturation = MaskMath.saturation(r: r, g: g, b: b)
 
-                var score = band(cb, low: cbLow, high: cbHigh, feather: 0.04)
-                score *= band(cr, low: crLow, high: crHigh, feather: 0.04)
-                score *= smoothstep(0.06, 0.18, luma)
-                score *= smoothstep(0.02, 0.08, saturation)
+                var score = MaskMath.band(
+                    cb,
+                    low: cbLow,
+                    high: cbHigh,
+                    feather: 0.04
+                )
+                score *= MaskMath.band(
+                    cr,
+                    low: crLow,
+                    high: crHigh,
+                    feather: 0.04
+                )
+                score *= MaskMath.smoothstep(0.06, 0.18, luma)
+                score *= MaskMath.smoothstep(0.02, 0.08, saturation)
 
                 if score > 0 {
                     let person = samplePersonMask(detection.personMask, u: u, v: v)
@@ -88,7 +99,7 @@ public struct SkinMaskGenerator {
         )
 
         if featherRadius > 0 {
-            values = boxBlur(
+            values = MaskFilters.boxBlur(
                 values,
                 width: size.width,
                 height: size.height,
@@ -107,39 +118,6 @@ public struct SkinMaskGenerator {
         let width = max(1, Int((CGFloat(image.width) * scale).rounded()))
         let height = max(1, Int((CGFloat(image.height) * scale).rounded()))
         return (width, height)
-    }
-
-    private func rgbaBytes(
-        from image: CGImage,
-        width: Int,
-        height: Int
-    ) throws -> [UInt8] {
-        var bytes = [UInt8](repeating: 0, count: width * height * 4)
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
-            ?? CGColorSpaceCreateDeviceRGB()
-
-        let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in
-            guard let context = CGContext(
-                data: buffer.baseAddress,
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bytesPerRow: width * 4,
-                space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                    | CGBitmapInfo.byteOrder32Big.rawValue
-            ) else {
-                return false
-            }
-            context.interpolationQuality = .medium
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return true
-        }
-
-        guard drawn else {
-            throw SkinMaskError.cannotCreateContext
-        }
-        return bytes
     }
 
     private func samplePersonMask(
@@ -207,132 +185,14 @@ public struct SkinMaskGenerator {
         height: Int,
         expansion: CGFloat
     ) {
-        guard points.count >= 3 else { return }
-
-        var polygon = points.map {
-            CGPoint(
-                x: $0.x * CGFloat(width),
-                y: (1 - $0.y) * CGFloat(height)
-            )
-        }
-
-        let centroid = polygon.reduce(CGPoint.zero) {
-            CGPoint(x: $0.x + $1.x, y: $0.y + $1.y)
-        }
-        let center = CGPoint(
-            x: centroid.x / CGFloat(polygon.count),
-            y: centroid.y / CGFloat(polygon.count)
+        let mask = PolygonRasterizer.makeMask(
+            points: points,
+            width: width,
+            height: height,
+            expansion: expansion
         )
-        polygon = polygon.map {
-            CGPoint(
-                x: center.x + ($0.x - center.x) * expansion,
-                y: center.y + ($0.y - center.y) * expansion
-            )
+        for index in values.indices where mask[index] > 0 {
+            values[index] = 0
         }
-
-        let xs = polygon.map(\.x)
-        let ys = polygon.map(\.y)
-        guard let minX = xs.min(), let maxX = xs.max(),
-              let minY = ys.min(), let maxY = ys.max() else {
-            return
-        }
-
-        let startX = max(0, Int(floor(minX)))
-        let endX = min(width - 1, Int(ceil(maxX)))
-        let startY = max(0, Int(floor(minY)))
-        let endY = min(height - 1, Int(ceil(maxY)))
-        guard startX <= endX, startY <= endY else { return }
-
-        for y in startY...endY {
-            for x in startX...endX {
-                if contains(
-                    x: CGFloat(x) + 0.5,
-                    y: CGFloat(y) + 0.5,
-                    polygon: polygon
-                ) {
-                    values[y * width + x] = 0
-                }
-            }
-        }
-    }
-
-    private func contains(
-        x: CGFloat,
-        y: CGFloat,
-        polygon: [CGPoint]
-    ) -> Bool {
-        var inside = false
-        var previous = polygon.count - 1
-        for current in polygon.indices {
-            let a = polygon[current]
-            let b = polygon[previous]
-            if (a.y > y) != (b.y > y) {
-                let intersectX = (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x
-                if x < intersectX {
-                    inside.toggle()
-                }
-            }
-            previous = current
-        }
-        return inside
-    }
-
-    private func band(
-        _ value: Float,
-        low: Float,
-        high: Float,
-        feather: Float
-    ) -> Float {
-        smoothstep(low - feather, low, value)
-            * (1 - smoothstep(high, high + feather, value))
-    }
-
-    private func smoothstep(_ edge0: Float, _ edge1: Float, _ value: Float) -> Float {
-        guard edge0 != edge1 else { return value >= edge1 ? 1 : 0 }
-        let t = min(max((value - edge0) / (edge1 - edge0), 0), 1)
-        return t * t * (3 - 2 * t)
-    }
-
-    private func boxBlur(
-        _ values: [Float],
-        width: Int,
-        height: Int,
-        radius: Int
-    ) -> [Float] {
-        guard radius > 0, width > 0, height > 0 else { return values }
-
-        let diameter = Float(radius * 2 + 1)
-        var horizontal = [Float](repeating: 0, count: values.count)
-        var output = [Float](repeating: 0, count: values.count)
-
-        for y in 0..<height {
-            let row = y * width
-            var sum: Float = 0
-            for offset in -radius...radius {
-                sum += values[row + min(max(offset, 0), width - 1)]
-            }
-            for x in 0..<width {
-                horizontal[row + x] = sum / diameter
-                let removeX = min(max(x - radius, 0), width - 1)
-                let addX = min(max(x + radius + 1, 0), width - 1)
-                sum += values[row + addX] - values[row + removeX]
-            }
-        }
-
-        for x in 0..<width {
-            var sum: Float = 0
-            for offset in -radius...radius {
-                let y = min(max(offset, 0), height - 1)
-                sum += horizontal[y * width + x]
-            }
-            for y in 0..<height {
-                output[y * width + x] = sum / diameter
-                let removeY = min(max(y - radius, 0), height - 1)
-                let addY = min(max(y + radius + 1, 0), height - 1)
-                sum += horizontal[addY * width + x] - horizontal[removeY * width + x]
-            }
-        }
-
-        return output
     }
 }

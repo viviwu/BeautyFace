@@ -71,6 +71,26 @@ func parseOptions() -> Options {
                 parameters.brightening = BeautyParameters.clamp(value)
                 index += 1
             }
+        case "--eye":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.eyeBrightening = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--teeth":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.teethWhitening = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--dark-circle":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.darkCircleRemoval = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--blemish":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.blemishRemoval = BeautyParameters.clamp(value)
+                index += 1
+            }
         case "--no-detect":
             detect = false
         case "--no-mask":
@@ -84,6 +104,10 @@ func parseOptions() -> Options {
               --smooth <0...1>     磨皮强度，默认 0.35
               --white <0...1>      美白强度，默认 0.25
               --bright <0...1>     提亮强度，默认 0.20
+              --eye <0...1>        亮眼强度，默认 0.20
+              --teeth <0...1>      白牙强度，默认 0.15
+              --dark-circle <0...1> 去黑眼圈强度，默认 0.25
+              --blemish <0...1>    去黑点/痘印强度，默认 0.30
               --no-detect          跳过检测与美化，输出恒等管线结果
               --no-mask            不使用人像分割蒙版（仅肤色）
             """)
@@ -139,7 +163,7 @@ let detector = FaceDetector(includePersonMask: options.includeMask)
 let engine: BeautyEngine?
 do {
     engine = try BeautyEngine(detector: detector)
-    print("渲染：Metal 磨皮 / 美白 / 提亮")
+    print("渲染：Metal 磨皮 / 美白 / 提亮 / 亮眼 / 白牙 / 去黑眼圈 / 去痘印")
 } catch {
     engine = nil
     print("渲染：不可用（\(error.localizedDescription)），回退恒等管线")
@@ -156,6 +180,13 @@ print(String(
     options.parameters.smoothing,
     options.parameters.whitening,
     options.parameters.brightening
+))
+print(String(
+    format: "      亮眼=%.2f 白牙=%.2f 去黑眼圈=%.2f 去痘印=%.2f",
+    options.parameters.eyeBrightening,
+    options.parameters.teethWhitening,
+    options.parameters.darkCircleRemoval,
+    options.parameters.blemishRemoval
 ))
 print("")
 
@@ -224,6 +255,25 @@ for url in urls {
                 result.skinMask.height,
                 result.skinMask.averageValue * 100
             ))
+            if !result.retouchMask.isEmpty {
+                let total = Float(result.retouchMask.width * result.retouchMask.height)
+                func describe(_ channel: [Float], _ label: String) -> String {
+                    let strong = channel.filter { $0 > 0.1 }.count
+                    let peak = channel.max() ?? 0
+                    return String(
+                        format: "%@ %d px (%.2f%%, 峰值 %.2f)",
+                        label,
+                        strong,
+                        Float(strong) / total * 100,
+                        peak
+                    )
+                }
+                print("       局部蒙版：" + [
+                    describe(result.retouchMask.eye, "眼白"),
+                    describe(result.retouchMask.teeth, "牙齿"),
+                    describe(result.retouchMask.darkCircle, "眼下"),
+                ].joined(separator: "；"))
+            }
 
             if let debugImage = DetectionDebugRenderer.render(
                 image: result.image,
@@ -253,6 +303,22 @@ for url in urls {
                     type: .png
                 )
                 print("         蒙版图 -> \(skinURL.lastPathComponent)")
+            }
+
+            if let retouchImage = RetouchDebugRenderer.render(
+                image: result.image,
+                mask: result.retouchMask
+            ) {
+                let retouchURL = options.output
+                    .appendingPathComponent(baseName + "_retouch")
+                    .appendingPathExtension("png")
+                try ImageEncoder.encode(
+                    retouchImage,
+                    metadata: result.metadata,
+                    to: retouchURL,
+                    type: .png
+                )
+                print("         局部图 -> \(retouchURL.lastPathComponent)")
             }
         } else {
             let processed = try pipeline.process(

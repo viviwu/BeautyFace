@@ -132,6 +132,102 @@ final class BeautyEngineTests: XCTestCase {
         XCTAssertGreaterThan(result.skinMask.averageValue, 0.005)
     }
 
+    /// 全部参数拉满（含局部修饰）时，皮肤蒙版与局部蒙版之外的像素必须保持不变。
+    func testLocalRetouchKeepsBackgroundWhenAvailable() throws {
+        let url = try TestSupport.sampleImageURL(named: "musk.jpeg")
+        let engine = try makeEngine()
+        let result = try engine.process(
+            url: url,
+            parameters: BeautyParameters(
+                smoothing: 1,
+                whitening: 1,
+                brightening: 1,
+                eyeBrightening: 1,
+                teethWhitening: 1,
+                darkCircleRemoval: 1,
+                blemishRemoval: 1
+            ),
+            quality: .preview
+        )
+
+        XCTAssertFalse(result.retouchMask.isEmpty, "应生成局部修饰蒙版")
+
+        let original = try ImageDecoder.decode(
+            url: url,
+            maxLongEdge: BeautyQuality.preview.maxLongEdge
+        ).image
+        let sourceBytes = try TestSupport.rgbaBytes(from: original)
+        let outputBytes = try TestSupport.rgbaBytes(from: result.image)
+        XCTAssertEqual(sourceBytes.count, outputBytes.count)
+
+        let width = result.image.width
+        let height = result.image.height
+        let skin = result.skinMask
+        let retouch = result.retouchMask
+
+        var checkedPixels = 0
+        var maxDifference = 0
+
+        for y in 0..<height {
+            let v = (Float(y) + 0.5) / Float(height)
+            let skinY = v * Float(skin.height) - 0.5
+            let retouchY = v * Float(retouch.height) - 0.5
+            let sy0 = Int(floor(skinY))
+            let ry0 = Int(floor(retouchY))
+            for x in 0..<width {
+                let u = (Float(x) + 0.5) / Float(width)
+                let skinX = u * Float(skin.width) - 0.5
+                let retouchX = u * Float(retouch.width) - 0.5
+                let sx0 = Int(floor(skinX))
+                let rx0 = Int(floor(retouchX))
+
+                // 与着色器一致：检查双线性采样的四个邻点，全部为 0 才算蒙版外
+                func skinValue(_ x: Int, _ y: Int) -> Float {
+                    let cx = min(max(x, 0), skin.width - 1)
+                    let cy = min(max(y, 0), skin.height - 1)
+                    return skin.value(x: cx, y: cy) ?? 0
+                }
+                func retouchValue(_ x: Int, _ y: Int) -> Float {
+                    let cx = min(max(x, 0), retouch.width - 1)
+                    let cy = min(max(y, 0), retouch.height - 1)
+                    let index = cy * retouch.width + cx
+                    return max(
+                        retouch.eye[index],
+                        max(retouch.teeth[index], retouch.darkCircle[index])
+                    )
+                }
+
+                let skinNeighbors = [
+                    skinValue(sx0, sy0), skinValue(sx0 + 1, sy0),
+                    skinValue(sx0, sy0 + 1), skinValue(sx0 + 1, sy0 + 1),
+                ]
+                let retouchNeighbors = [
+                    retouchValue(rx0, ry0), retouchValue(rx0 + 1, ry0),
+                    retouchValue(rx0, ry0 + 1), retouchValue(rx0 + 1, ry0 + 1),
+                ]
+                guard skinNeighbors.allSatisfy({ $0 < 0.001 }),
+                      retouchNeighbors.allSatisfy({ $0 < 0.001 }) else {
+                    continue
+                }
+
+                checkedPixels += 1
+                let offset = (y * width + x) * 4
+                for channel in 0..<3 {
+                    maxDifference = max(
+                        maxDifference,
+                        abs(
+                            Int(sourceBytes[offset + channel])
+                                - Int(outputBytes[offset + channel])
+                        )
+                    )
+                }
+            }
+        }
+
+        XCTAssertGreaterThan(checkedPixels, width * height / 5)
+        XCTAssertLessThanOrEqual(maxDifference, 1)
+    }
+
     private func makeEngine() throws -> BeautyEngine {
         do {
             return try BeautyEngine()

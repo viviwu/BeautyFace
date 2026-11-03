@@ -28,6 +28,7 @@ public struct BeautyResult {
     public let metadata: ImageMetadata
     public let detection: DetectionResult
     public let skinMask: SkinMask
+    public let retouchMask: RetouchMask
     public let parameters: BeautyParameters
     public let originalSize: CGSize
     public let wasDownscaled: Bool
@@ -38,6 +39,7 @@ public struct BeautyResult {
         metadata: ImageMetadata,
         detection: DetectionResult,
         skinMask: SkinMask,
+        retouchMask: RetouchMask,
         parameters: BeautyParameters,
         originalSize: CGSize,
         wasDownscaled: Bool,
@@ -47,6 +49,7 @@ public struct BeautyResult {
         self.metadata = metadata
         self.detection = detection
         self.skinMask = skinMask
+        self.retouchMask = retouchMask
         self.parameters = parameters
         self.originalSize = originalSize
         self.wasDownscaled = wasDownscaled
@@ -112,9 +115,15 @@ public final class BeautyEngine {
             image: decoded.image,
             detection: detection
         )
+        let retouchMask = try RetouchMaskGenerator().generate(
+            image: decoded.image,
+            detection: detection,
+            skinMask: skinMask
+        )
         let rendered = try renderer.render(
             image: decoded.image,
             skinMask: skinMask,
+            retouchMask: retouchMask,
             parameters: parameters
         )
 
@@ -123,6 +132,7 @@ public final class BeautyEngine {
             metadata: decoded.metadata,
             detection: detection,
             skinMask: skinMask,
+            retouchMask: retouchMask,
             parameters: parameters,
             originalSize: decoded.originalSize,
             wasDownscaled: decoded.wasDownscaled,

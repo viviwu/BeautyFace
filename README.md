@@ -1,9 +1,9 @@
 # BeautyFace
 
-面向 iOS 的人像美化 SDK 与配套 Demo App。第一版专注于**静态图片**，以头部与面部处理为主，支持多人脸。身体部分只做颈部与肩部的协调，保证脸与躯体过渡自然。
+面向 **macOS（Apple Silicon / arm64）与 iOS** 的人像（面部为主）照片美化 App，同时提供 Swift Package 形式的 SDK。第一版专注于**静态图片**，以头部与面部处理为主，支持多人脸。身体部分只做颈部与肩部的协调，保证脸与躯体过渡自然。
 
 - 状态：M0 完成（Mac 构建验收），准备进入 M1
-- 最后更新：2026-11-02
+- 最后更新：2026-11-03
 - 开发台账（ADR、里程碑、计划）：见 [dev_ledger.md](dev_ledger.md)
 
 ---
@@ -12,11 +12,13 @@
 
 ### 1.1 第一版（v1）做什么
 
+- 平台：macOS 15+（Apple Silicon / arm64）、iOS 18+
 - 输入：静态图片（相册、拍照、文件），HEIC / JPEG / PNG
 - 处理：皮肤美化、五官与脸型形变、程序化美妆、颈肩协调
 - 多人脸：逐张检测，各自独立参数
 - 输出：处理后的图片，长边 ≤ 4096 像素，保留 EXIF 与颜色配置
-- 交付：Swift Package 形式的 SDK，加一个 SwiftUI Demo App
+- 交付：Swift Package 形式的 SDK、SwiftUI App（macOS / iOS），以及开发调试命令行工具 AutoBeauty
+- 调试：核心功能开发阶段由 AutoBeauty 直接读取 `SampleImages/` 批处理，无需相册交互与人工点击
 
 ### 1.2 第一版明确不做
 
@@ -29,8 +31,11 @@
 
 ### 1.3 运行与兼容
 
-- 部署目标：iOS 18
-- 验收机型：iPhone 17（A19）、iPhone Air（A19 Pro），均运行 iOS 26
+- 部署目标：iOS 18、macOS 15（Apple Silicon / arm64）
+- 支持平台：macOS（arm64）、iOS
+- 验收机型：iPhone 17（A19）、iPhone Air（A19 Pro），均运行 iOS 26；真机验证推迟到核心功能基本完成后
+- 系统相册（PhotosPicker）路径只在非 Debug 模式下验证
+- Debug 处理结果由 AutoBeauty 写入仓库 `processed/`；Release / iOS 由用户选择保存或导出
 - 所有处理在设备端完成，不联网
 
 ---
@@ -39,15 +44,25 @@
 
 分级含义：**A** 第一版必须完成；**B** A 完成后补充，效果可能偏粗；**C** 本版不做。
 
+### 人脸检测
+
+| 功能 | 级别 | 说明 |
+|---|---|---|
+| 人脸框与关键点 | A | Vision 检测，76 点关键点 |
+| 人像蒙版 | A | 用于皮肤处理与背景保护 |
+| 多人脸 | A | 逐张检测，各自独立参数 |
+
 ### 基础美颜
 
 | 功能 | 级别 | 说明 |
 |---|---|---|
-| 美白 | A | 皮肤蒙版内提亮并调整色调 |
+| 美白 / 淡化肤色 | A | 皮肤蒙版内提亮、降低偏色与肤色不均 |
 | 磨皮 | A | 引导滤波 + 高低频分离，保留纹理 |
+| 增亮 / 提亮 | A | 面部整体亮度与对比度调整，保留高光 |
 | 亮眼 | A | 巩膜区域提亮，不影响虹膜 |
 | 白牙 | A | 口内低饱和高亮区域校正 |
 | 去黑眼圈 | A | 眼下区域提亮并校正偏色 |
+| 去黑点 / 痘印 | A | 皮肤蒙版内小面积瑕疵检测与修复 |
 
 ### 美型（脸型）
 
@@ -85,12 +100,6 @@
 | 颈肩过渡 | A | 脸部位移沿颈部向下衰减，到肩线为 0 |
 | 瘦腰等身体塑形 | C | 本版不做 |
 
-### 多人脸
-
-| 功能 | 级别 | 说明 |
-|---|---|---|
-| 逐张检测与独立参数 | A | 每张脸有自己的参数集 |
-
 ---
 
 ## 三、架构
@@ -114,7 +123,7 @@
 └──────────────────────────────────────────────┘
 ```
 
-**依赖方向**：BeautyFaceDemo → BFKit → BFAlgorithms。`BFAlgorithms` 不能反向依赖任何上层模块，也不能 `import` Apple 框架。
+**依赖方向**：BeautyFaceDemo / AutoBeauty → BFKit → BFAlgorithms。`BFAlgorithms` 不能反向依赖任何上层模块，也不能 `import` Apple 框架。
 
 ### 3.1 处理流水线
 
@@ -125,7 +134,7 @@
   → 几何：合并位移场（脸部形变 + 颈肩协调） → 单次 warp
   → 变换关键点（同一 MLS 映射）
   → 美妆：使用变形后的关键点定位
-  → 输出：编码保存，保留 EXIF 与颜色配置
+  → 输出：编码保存，保留 EXIF 与颜色配置；Debug 由 AutoBeauty 写入 processed/，Release / iOS 由用户导出
 ```
 
 ### 3.2 对外 API（草案）
@@ -184,8 +193,11 @@ BeautyFace/
 │       │   ├── Shaders/
 │       │   └── Pipeline/
 │       └── Tests/BFKitTests/
-├── BeautyFaceDemo/            SwiftUI App
-└── SampleImages/              真机拍摄素材（由 .gitignore 排除，不入库）
+├── BeautyFaceDemo/            SwiftUI App（macOS / iOS）
+├── Tools/
+│   └── AutoBeauty/            macOS 快速调试 CLI
+├── SampleImages/              开发调试素材（由 .gitignore 排除，不入库）
+└── processed/                 AutoBeauty 输出（由 .gitignore 排除，不入库）
 ```
 
 ---
@@ -196,14 +208,28 @@ BeautyFace/
 
 - Xcode 26 或更新版本
 - macOS 15 或更新版本，Apple Silicon 芯片（日常开发与调试在此运行）
-- iPhone 17 或 iPhone Air 真机（最终验收；Mac 上的性能与内存数据不作为验收依据，见 ADR-013）
+- iPhone 17 或 iPhone Air 真机（最终验收；Mac 上的性能与内存数据不作为验收依据，见 ADR-013 / ADR-014）
 
 **运行步骤**
 
 1. 打开 `BeautyFace.xcworkspace`
-2. 选择 `BeautyFaceDemo` Scheme，目标设备选择 My Mac（日常调试）
+2. 选择 `BeautyFaceDemo` Scheme，目标设备选择 My Mac 或 iOS 设备
 3. Debug 配置使用本机签名（`CODE_SIGN_IDENTITY = "-"`），无需开发者证书；Release 与真机运行仍需有效的 Apple Development 证书
-4. 需要验收时，选择 iPhone 真机运行；首次运行需在设备上信任开发者证书
+4. `BeautyFaceDemo` 始终使用 PhotosPicker；系统相册路径只在非 Debug 模式下验证
+5. iPhone 真机验证推迟到核心功能基本完成后；首次运行需在设备上信任开发者证书
+
+**快速调试（AutoBeauty，仅 macOS）**
+
+核心功能开发阶段使用 `AutoBeauty` 直接读取 `SampleImages/`，无需相册交互与人工点击：
+
+```bash
+swift run --package-path Tools/AutoBeauty
+```
+
+- 默认批量处理 `SampleImages/` 下的全部图片
+- 结果写入仓库根目录 `processed/`（已加入 `.gitignore`）
+- 支持 `--input <目录>` / `--output <目录>` 覆盖默认路径
+- M0 阶段为恒等解码/PNG 输出，M1 起接入 BFKit 处理管线
 
 **算法层单独测试**（不需要真机）
 
@@ -217,6 +243,7 @@ swift test
 ## 七、测试
 
 - **算法层**：`swift test` 在 Mac 上运行，覆盖 MLS 求解、参数映射、预设编解码、衰减函数。
+- **AutoBeauty**：批量处理 `SampleImages/`，输出到 `processed/` 做回归与前后对比。
 - **快照测试**：固定图片与参数，输出与参考图比较，允许少量容差。
 - **背景保护**：蒙版外像素变化接近 0。
 - **几何检查**：位移场雅可比行列式为正，防止折叠。
@@ -235,12 +262,15 @@ swift test
 | 内存峰值 | 处理 4800 万像素原图不闪退，峰值在设备可承受范围内 |
 | 连续 20 张图 | 无内存增长，耗时波动 ≤ 20% |
 
+macOS（arm64）为正式支持平台；性能验收仍以 iPhone 17 / iPhone Air 为准（ADR-014）。
+
 ---
 
 ## 九、隐私
 
 - 图片与处理结果只保存在设备本地。
-- 导出仅申请相册添加权限，不读取整个相册。
+- Debug 阶段由 AutoBeauty 写入仓库 `processed/`，仅用于开发调试。
+- Release / iOS 导出仅由用户主动选择（相册或 Files），不读取整个相册。
 - 不包含任何网络请求或数据上传。
 
 ---

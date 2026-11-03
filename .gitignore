@@ -16,3 +16,6 @@ Packages/*/Package.resolved
 
 # 真机拍摄的测试素材（体积大、含个人照片，不入库）
 SampleImages/
+
+# AutoBeauty 处理输出（不带入仓库）
+processed/

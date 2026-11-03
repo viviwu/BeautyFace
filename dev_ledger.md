@@ -29,6 +29,8 @@
 | ADR-011 | 视频与实时预览延后，接口不阻碍后续加入 | 已接受 | 2026-10-26 |
 | ADR-012 | 多人脸逐张独立处理 | 已接受 | 2026-10-26 |
 | ADR-013 | 先以 Mac（Apple Silicon）为主开发调试，iPhone 为最终验收 | 已接受 | 2026-11-02 |
+| ADR-014 | macOS（Apple Silicon / arm64）为正式支持平台 | 已接受 | 2026-11-03 |
+| ADR-015 | 独立 AutoBeauty 命令行工具作为调试入口 | 已接受 | 2026-11-03 |
 
 ### ADR-001 第一版只处理静态图片
 - **背景**：需求中包含实时相机与视频，但第一版的核心目标是尽快做出可用的图片美化。
@@ -99,6 +101,22 @@
   - Mac App 默认启用 App Sandbox；导出到相册时需按 iOS 的权限模型补充配置。
   - 部署目标保持不变（iOS 18、macOS 15）；Mac 版不改变 ADR-003 的验收机型。
 
+### ADR-014 macOS（Apple Silicon / arm64）为正式支持平台
+- **背景**：ADR-013 将 Mac 定位为开发调试环境；产品需求已明确 macOS 与 iOS 均为正式交付平台，Mac 用户需要同等完整的功能与导出能力。
+- **决定**：macOS 15+（Apple Silicon / arm64）与 iOS 18+ 并列为正式支持平台；两平台共享同一套 BFKit / BFAlgorithms 与 SwiftUI App；性能验收仍以 iPhone 17 / iPhone Air 为准，Mac 端只做功能与稳定性验收。
+- **后果**：
+  - 不使用仅 iOS 可用的 API；不依赖 UIKit / AppKit。
+  - 导出路径需同时适配两平台：iOS 走相册 / Files，macOS 走文件面板。
+  - 维持 ADR-013 的「Mac 数据不作为性能验收依据」；需要时另立 Mac 性能目标。
+
+### ADR-015 独立 AutoBeauty 命令行工具作为调试入口
+- **背景**：M0–M7 的主要工作是算法与调参，通过 App + 相册选择验证需要人工点击；Debug 读取仓库素材还需关闭 App Sandbox，影响工程配置与安全边界。
+- **决定**：新增独立 SwiftPM 可执行包 `Tools/AutoBeauty`，依赖 BFKit，直接读取 `SampleImages/` 并批量输出到仓库 `processed/`；BeautyFaceDemo 恢复为始终使用 PhotosPicker，Debug 沙盒保持开启。
+- **后果**：
+  - 核心功能验证不依赖相册与 UI，便于脚本化与前后对比。
+  - `processed/` 为生成物，加入 `.gitignore`，不进入版本库。
+  - AutoBeauty 与 App 共享同一处理管线，避免两套实现；M1 起以该工具作为恒等 / 处理回归入口。
+
 ---
 
 ## 2. 里程碑与状态
@@ -108,8 +126,8 @@
 | M0 | 骨架 | 工程、Swift Package、SwiftUI 空壳、素材目录 | 能选图并显示 | 2–3 天 | 已完成（Mac；真机待补） |
 | M1 | 图像管线 | 解码、EXIF、缩放、rgba16Float、编码输出 | 恒等处理误差 ≤ 1 个灰阶 | 3–4 天 | 未开始 |
 | M2 | 检测与调试视图 | Vision 脸框、76 点、人像蒙版、多脸、调试绘制 | 样图关键点正确，多脸分别输出 | 4–5 天 | 未开始 |
-| M3 | 皮肤 | 皮肤蒙版、磨皮、美白、预览与全分辨率 | 边缘无明显伪影，背景不变 | 1 周 | 未开始 |
-| M4 | 局部修饰 | 亮眼、白牙、去黑眼圈 | 效果可控，唇与眼白不被误伤 | 4 天 | 未开始 |
+| M3 | 皮肤 | 皮肤蒙版、磨皮、美白/淡化肤色、增亮/提亮、预览与全分辨率 | 边缘无明显伪影，背景不变 | 1 周 | 未开始 |
+| M4 | 局部修饰 | 亮眼、白牙、去黑眼圈、去黑点/痘印 | 效果可控，唇与眼白不被误伤 | 4 天 | 未开始 |
 | M5 | MLS 与脸型 | MLS 求解器、位移场、单次 warp、小脸/瘦脸/窄脸/V 脸/下巴/额头/颧骨 | 大幅度形变无折叠，背景不变形 | 1.5 周 | 未开始 |
 | M6 | 五官形变 | 大眼、眼距、眉间距、眉毛粗细、鼻翼、嘴型 | 五官比例自然 | 1 周 | 未开始 |
 | M7 | 程序化美妆 | 口红、腮红、眉毛、眼妆，基于变形后关键点 | 随脸型变形仍对齐 | 1 周 | 未开始 |
@@ -149,14 +167,21 @@
 - 已通过自动化截图验证：`SampleImages/musk.jpeg` 与 `SampleImages/vivi.jpeg` 均可正常显示并可切换。
 - 未覆盖项：当前环境未安装 iOS 模拟器 runtime，iPhone 设备均 Offline；PhotosPicker 系统相册路径与真机冒烟待设备可用后补做。
 
+**进展（2026-11-03，调试工具与定位更新）**：
+- 新增 `Tools/AutoBeauty`（SwiftPM 可执行包，依赖 BFKit）：批量读取 `SampleImages/`，输出到仓库 `processed/`，支持 `--input` / `--output`；M0 阶段为恒等解码 / PNG 输出。
+- `ContentView` 恢复为始终使用 PhotosPicker；Debug 重新开启 App Sandbox，不再内嵌 `SampleImages` 读取逻辑。
+- 平台定位更新为 macOS（arm64）+ iOS 双正式平台（ADR-014）；新增 ADR-015（AutoBeauty）。
+- 功能清单补充：美白 / 淡化肤色、增亮 / 提亮、去黑点 / 痘印（A）。
+- 已验证：`swift run --package-path Tools/AutoBeauty` 成功处理两张样例并写入 `processed/`。
+
 - [x] 创建 `BeautyFace.xcworkspace`
 - [x] 创建 `Packages/BFAlgorithms`，确认 `Package.swift` 不依赖 Apple 框架（已生成；`scripts/check_no_apple_imports.sh` 通过）
 - [x] 创建 `Packages/BFKit`，依赖 `BFAlgorithms`（已生成）
 - [x] 创建 `BeautyFaceDemo` SwiftUI App，部署目标已修正为 iOS 18
-- [ ] 配置 PhotosPicker 选图，显示原图（代码完成；Debug 暂用 `SampleImages` 自动化验证，系统相册路径待真机确认）
+- [x] 配置 PhotosPicker 选图并显示原图（代码完成；系统相册路径待非 Debug 真机验证）
 - [x] 建立 `SampleImages/` 目录（已被 `.gitignore` 排除），真机素材待拍摄放入
 - [x] 修复本机构建问题：同名 `Placeholder.swift`、已吊销证书、部署目标 26.2
-- [ ] 在 iPhone 17 与 iPhone Air 上运行验证（设备当前 Offline）
+- [ ] 在 iPhone 17 与 iPhone Air 上运行验证（推迟到核心功能基本完成后）
 - [x] 确认两个 Package 可用 `swift test` 在 Mac 上运行
 - [x] 决定 `SampleImages/` 是否入库：放在项目目录内，由 `.gitignore` 排除（Q-02）
 
@@ -194,11 +219,14 @@
 
 | 设备 | 系统 | 芯片 | 素材 | 状态 |
 |---|---|---|---|---|
-| iPhone 17 | iOS 26 | A19 | 前置自拍、后置 4800 万像素 HEIC、多人合影 | 待拍摄 |
-| iPhone Air | iOS 26 | A19 Pro | 前置自拍、后置 4800 万像素 HEIC、多人合影 | 待拍摄 |
+| macOS（Apple Silicon / arm64） | macOS 15+ | M 系列 | `SampleImages/`（musk.jpeg、vivi.jpeg） | 开发调试（AutoBeauty） |
+| iPhone 17 | iOS 26 | A19 | 前置自拍、后置 4800 万像素 HEIC、多人合影 | 推迟（核心功能完成后） |
+| iPhone Air | iOS 26 | A19 Pro | 前置自拍、后置 4800 万像素 HEIC、多人合影 | 推迟（核心功能完成后） |
 | iOS 18 设备 | iOS 18 | — | — | 待定（Q-01） |
 
 素材拍摄要求：前置自拍覆盖正面、微侧、戴眼镜、弱光、逆光；每类至少若干张。
+
+PhotosPicker 系统相册路径只在非 Debug 模式下验证。
 
 ---
 
@@ -211,3 +239,6 @@
 | 2026-11-02 | 新增 ADR-013（Mac 优先开发、iPhone 最终验收）；ContentView 去除 UIKit 依赖，改用 CGImage，支持 macOS |
 | 2026-11-02 | M0 完成 Mac 构建验收：修复同名 Placeholder 文件、Debug 改本机签名、部署目标修正为 iOS 18 / macOS 15；两个 Package `swift test` 与 App `xcodebuild` 均通过 |
 | 2026-11-02 | 调试流程改为直接读取 `SampleImages/`（Debug 自动载入示例图、关闭 App Sandbox），便于自动化验证；新增工程约定 `AGENTS.md` |
+| 2026-11-03 | 平台定位更新为 macOS（arm64）+ iOS，新增 ADR-014；功能清单补充美白/淡化肤色、增亮/提亮、去黑点/痘印（A） |
+| 2026-11-03 | 新增 ADR-015 与 `Tools/AutoBeauty` CLI（SampleImages 批处理 → processed/）；主 App 恢复始终使用 PhotosPicker，Debug 重新开启沙盒 |
+| 2026-11-03 | iPhone 真机验证推迟到核心功能基本完成后；PhotosPicker 只在非 Debug 验证；`processed/` 加入 .gitignore |

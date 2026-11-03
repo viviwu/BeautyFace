@@ -18,7 +18,16 @@
 - 开发与调试核心功能时，优先直接读取 `SampleImages/` 目录中的照片，不依赖系统相册或 PhotosPicker。
 - `SampleImages/` 中任意一张照片都可以用于测试与调试。
 - 自动化验证（截图、脚本）应使用 `SampleImages/` 中的固定素材，保证可重复。
+- 核心功能调试统一使用 `Tools/AutoBeauty`：批量处理 `SampleImages/` 并输出到 `processed/`，无需相册交互。
+- `processed/` 为 AutoBeauty 生成物，已被 `.gitignore` 排除，不提交到仓库。
 - `SampleImages/` 已被 `.gitignore` 排除，不提交到仓库。
+
+## 平台与验证节奏
+
+- 正式支持平台：macOS 15+（Apple Silicon / arm64）、iOS 18+。
+- iPhone 真机验证推迟到核心功能基本完成后；日常开发与调试在 macOS 上完成。
+- PhotosPicker 系统相册路径只在非 Debug 模式下验证。
+- Debug 处理结果由 AutoBeauty 写入 `processed/`；Release / iOS 由用户选择保存或导出。
 
 ## 提交与推送
 

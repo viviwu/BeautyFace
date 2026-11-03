@@ -2,7 +2,7 @@
 
 面向 **macOS（Apple Silicon / arm64）与 iOS** 的人像（面部为主）照片美化 App，同时提供 Swift Package 形式的 SDK。第一版专注于**静态图片**，以头部与面部处理为主，支持多人脸。身体部分只做颈部与肩部的协调，保证脸与躯体过渡自然。
 
-- 状态：M1 完成（图像管线），准备进入 M2
+- 状态：M2 完成（Vision 检测与调试），准备进入 M3
 - 最后更新：2026-11-03
 - 开发台账（ADR、里程碑、计划）：见 [dev_ledger.md](dev_ledger.md)
 
@@ -230,6 +230,8 @@ swift run --package-path Tools/AutoBeauty
 - 结果写入仓库根目录 `processed/`（已加入 `.gitignore`）
 - 支持 `--input <目录>` / `--output <目录>` 覆盖默认路径
 - M1 起已接入 BFKit：解码、EXIF 方向归一、4096 长边缩放、rgba16Float 工作纹理与编码输出
+- M2 起默认检测人脸与人像蒙版，并输出 `_debug.png`（人脸框、76 点关键点、半透明蒙版）
+- `--no-detect` 关闭检测，`--no-mask` 跳过人像蒙版；需指定可执行名，例如 `swift run --package-path Tools/AutoBeauty AutoBeauty --no-mask`
 
 **算法层单独测试**（不需要真机）
 
@@ -245,6 +247,7 @@ swift test
 - **算法层**：`swift test` 在 Mac 上运行，覆盖 MLS 求解、参数映射、预设编解码、衰减函数。
 - **AutoBeauty**：批量处理 `SampleImages/`，输出到 `processed/` 做回归与前后对比。
 - **恒等回归**：合成测试图经 `rgba16Float` 工作纹理往返，最大通道误差 ≤ 1 灰阶。
+- **人脸检测**：样例图检测 1 张脸、拼接图检测 2 张脸；76 点关键点；人像蒙版非空。
 - **快照测试**：固定图片与参数，输出与参考图比较，允许少量容差。
 - **背景保护**：蒙版外像素变化接近 0。
 - **几何检查**：位移场雅可比行列式为正，防止折叠。

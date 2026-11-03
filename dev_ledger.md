@@ -125,7 +125,7 @@
 |---|---|---|---|---|---|
 | M0 | 骨架 | 工程、Swift Package、SwiftUI 空壳、素材目录 | 能选图并显示 | 2–3 天 | 已完成（Mac；真机待补） |
 | M1 | 图像管线 | 解码、EXIF、缩放、rgba16Float、编码输出 | 恒等处理误差 ≤ 1 个灰阶 | 3–4 天 | 已完成（Mac） |
-| M2 | 检测与调试视图 | Vision 脸框、76 点、人像蒙版、多脸、调试绘制 | 样图关键点正确，多脸分别输出 | 4–5 天 | 未开始 |
+| M2 | 检测与调试视图 | Vision 脸框、76 点、人像蒙版、多脸、调试绘制 | 样图关键点正确，多脸分别输出 | 4–5 天 | 已完成（Mac） |
 | M3 | 皮肤 | 皮肤蒙版、磨皮、美白/淡化肤色、增亮/提亮、预览与全分辨率 | 边缘无明显伪影，背景不变 | 1 周 | 未开始 |
 | M4 | 局部修饰 | 亮眼、白牙、去黑眼圈、去黑点/痘印 | 效果可控，唇与眼白不被误伤 | 4 天 | 未开始 |
 | M5 | MLS 与脸型 | MLS 求解器、位移场、单次 warp、小脸/瘦脸/窄脸/V 脸/下巴/额头/颧骨 | 大幅度形变无折叠，背景不变形 | 1.5 周 | 未开始 |
@@ -193,6 +193,14 @@
 - **恒等验收**：合成测试图经「解码 → rgba16Float 纹理 → 回读 → PNG 编码 → 解码」，最大通道误差 ≤ 1 灰阶（实测 0）；覆盖缩放、方向与 EXIF 保留。
 - **验证**：BFKitTests 6 项通过；`swift run --package-path Tools/AutoBeauty` 处理 `SampleImages/` 两张成功，输出到 `processed/`。
 
+### 3.2 M2 检测与调试（已完成 2026-11-03）
+
+- **人脸框与关键点**：`FaceDetector` 使用 `VNDetectFaceLandmarksRequest`，输出归一化人脸框、76 点关键点与各区域点集；多脸逐张输出。
+- **人像蒙版**：`VNGeneratePersonSegmentationRequest`（accurate，OneComponent8），转换为 `SegmentationMask` 供后续皮肤处理与背景保护使用。
+- **调试绘制**：`DetectionDebugRenderer` 输出人脸框、关键点连线/圆点与半透明蒙版，AutoBeauty 写入 `processed/<name>_debug.png`。
+- **验证**：`SampleImages/musk.jpeg` 与 `vivi.jpeg` 各检测 1 张脸、76 点、蒙版非空；两张样例横向拼接后检测到 2 张脸；BFKitTests 10 项通过。
+- **已知限制**：多脸仅用拼接图验证，尚未使用真实多人合影；后续补拍多人素材。
+
 ---
 
 ## 4. 风险登记
@@ -251,3 +259,4 @@ PhotosPicker 系统相册路径只在非 Debug 模式下验证。
 | 2026-11-03 | 新增 ADR-015 与 `Tools/AutoBeauty` CLI（SampleImages 批处理 → processed/）；主 App 恢复始终使用 PhotosPicker，Debug 重新开启沙盒 |
 | 2026-11-03 | iPhone 真机验证推迟到核心功能基本完成后；PhotosPicker 只在非 Debug 验证；`processed/` 加入 .gitignore |
 | 2026-11-03 | M1 完成：ImageDecoder / ImageEncoder / rgba16Float TextureConverter / ImagePipeline；BFKitTests 6 项通过，恒等误差 ≤ 1 灰阶；AutoBeauty 接入 BFKit |
+| 2026-11-03 | M2 完成：FaceDetector（脸框 / 76 点 / 人像蒙版 / 多脸）与 DetectionDebugRenderer；AutoBeauty 输出 `_debug.png`；BFKitTests 10 项通过 |

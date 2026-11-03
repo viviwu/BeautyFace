@@ -5,6 +5,8 @@ import BFKit
 struct Options {
     var input: URL
     var output: URL
+    var detect: Bool
+    var includeMask: Bool
 }
 
 func repositoryRoot() -> URL {
@@ -20,6 +22,8 @@ func parseOptions() -> Options {
     let root = repositoryRoot()
     var input = root.appendingPathComponent("SampleImages", isDirectory: true)
     var output = root.appendingPathComponent("processed", isDirectory: true)
+    var detect = true
+    var includeMask = true
 
     let arguments = Array(CommandLine.arguments.dropFirst())
     var index = 0
@@ -35,15 +39,19 @@ func parseOptions() -> Options {
                 output = URL(fileURLWithPath: arguments[index + 1])
                 index += 1
             }
+        case "--no-detect":
+            detect = false
+        case "--no-mask":
+            includeMask = false
         case "-h", "--help":
-            print("用法: AutoBeauty [--input <目录>] [--output <目录>]")
+            print("用法: AutoBeauty [--input <目录>] [--output <目录>] [--no-detect] [--no-mask]")
             exit(0)
         default:
             print("忽略未知参数: \(arguments[index])")
         }
         index += 1
     }
-    return Options(input: input, output: output)
+    return Options(input: input, output: output, detect: detect, includeMask: includeMask)
 }
 
 let options = parseOptions()
@@ -79,6 +87,14 @@ do {
 print("")
 
 let pipeline = ImagePipeline(converter: converter)
+let detector = FaceDetector(includePersonMask: options.includeMask)
+if options.detect {
+    print("检测：Vision 人脸 / 关键点\(options.includeMask ? " / 人像蒙版" : "")")
+} else {
+    print("检测：已禁用")
+}
+print("")
+
 var failures: [String] = []
 var successCount = 0
 
@@ -86,8 +102,9 @@ for url in urls {
     let start = Date()
     do {
         let processed = try pipeline.process(url: url)
+        let baseName = url.deletingPathExtension().lastPathComponent
         let outputURL = options.output
-            .appendingPathComponent(url.deletingPathExtension().lastPathComponent)
+            .appendingPathComponent(baseName)
             .appendingPathExtension("png")
         try ImageEncoder.encode(
             processed.image,
@@ -110,6 +127,42 @@ for url in urls {
             elapsed,
             outputURL.lastPathComponent
         ))
+
+        guard options.detect else { continue }
+
+        let detection = try detector.detect(image: processed.image)
+        let maskNote = detection.personMask.map { "\($0.width)×\($0.height)" } ?? "无"
+        print("       检测：\(detection.faces.count) 张人脸；人像蒙版：\(maskNote)")
+        for (index, face) in detection.faces.enumerated() {
+            let box = face.boundingBox
+            let points = face.landmarks?.allPoints.count ?? 0
+            print(String(
+                format: "         人脸 %d：bbox=(%.3f, %.3f, %.3f, %.3f) 关键点=%d 置信度=%.2f",
+                index + 1,
+                box.minX,
+                box.minY,
+                box.width,
+                box.height,
+                points,
+                face.confidence
+            ))
+        }
+
+        if let debugImage = DetectionDebugRenderer.render(
+            image: processed.image,
+            result: detection
+        ) {
+            let debugURL = options.output
+                .appendingPathComponent(baseName + "_debug")
+                .appendingPathExtension("png")
+            try ImageEncoder.encode(
+                debugImage,
+                metadata: processed.metadata,
+                to: debugURL,
+                type: .png
+            )
+            print("         调试图 -> \(debugURL.lastPathComponent)")
+        }
     } catch {
         failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
         print("[FAIL] \(url.lastPathComponent)：\(error.localizedDescription)")

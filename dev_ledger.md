@@ -124,7 +124,7 @@
 | 编号 | 名称 | 主要内容 | 完成标准 | 估计工期 | 状态 |
 |---|---|---|---|---|---|
 | M0 | 骨架 | 工程、Swift Package、SwiftUI 空壳、素材目录 | 能选图并显示 | 2–3 天 | 已完成（Mac；真机待补） |
-| M1 | 图像管线 | 解码、EXIF、缩放、rgba16Float、编码输出 | 恒等处理误差 ≤ 1 个灰阶 | 3–4 天 | 未开始 |
+| M1 | 图像管线 | 解码、EXIF、缩放、rgba16Float、编码输出 | 恒等处理误差 ≤ 1 个灰阶 | 3–4 天 | 已完成（Mac） |
 | M2 | 检测与调试视图 | Vision 脸框、76 点、人像蒙版、多脸、调试绘制 | 样图关键点正确，多脸分别输出 | 4–5 天 | 未开始 |
 | M3 | 皮肤 | 皮肤蒙版、磨皮、美白/淡化肤色、增亮/提亮、预览与全分辨率 | 边缘无明显伪影，背景不变 | 1 周 | 未开始 |
 | M4 | 局部修饰 | 亮眼、白牙、去黑眼圈、去黑点/痘印 | 效果可控，唇与眼白不被误伤 | 4 天 | 未开始 |
@@ -185,6 +185,14 @@
 - [x] 确认两个 Package 可用 `swift test` 在 Mac 上运行
 - [x] 决定 `SampleImages/` 是否入库：放在项目目录内，由 `.gitignore` 排除（Q-02）
 
+### 3.1 M1 图像管线（已完成 2026-11-03）
+
+- **解码**：`ImageDecoder` 使用 ImageIO，支持 HEIC / JPEG / PNG；按 EXIF 方向归一；长边 > 4096 时等比缩放，不放大。
+- **工作纹理**：`TextureConverter` 在 CGImage 与 `rgba16Float` Metal 纹理之间转换，保持 gamma 空间（ADR-010），纹理使用 `.shared` 存储。
+- **编码**：`ImageEncoder` 保留源 EXIF / TIFF / GPS 属性与颜色空间，方向写回 1，并更新像素尺寸；支持 Data / URL 输出。
+- **恒等验收**：合成测试图经「解码 → rgba16Float 纹理 → 回读 → PNG 编码 → 解码」，最大通道误差 ≤ 1 灰阶（实测 0）；覆盖缩放、方向与 EXIF 保留。
+- **验证**：BFKitTests 6 项通过；`swift run --package-path Tools/AutoBeauty` 处理 `SampleImages/` 两张成功，输出到 `processed/`。
+
 ---
 
 ## 4. 风险登记
@@ -242,3 +250,4 @@ PhotosPicker 系统相册路径只在非 Debug 模式下验证。
 | 2026-11-03 | 平台定位更新为 macOS（arm64）+ iOS，新增 ADR-014；功能清单补充美白/淡化肤色、增亮/提亮、去黑点/痘印（A） |
 | 2026-11-03 | 新增 ADR-015 与 `Tools/AutoBeauty` CLI（SampleImages 批处理 → processed/）；主 App 恢复始终使用 PhotosPicker，Debug 重新开启沙盒 |
 | 2026-11-03 | iPhone 真机验证推迟到核心功能基本完成后；PhotosPicker 只在非 Debug 验证；`processed/` 加入 .gitignore |
+| 2026-11-03 | M1 完成：ImageDecoder / ImageEncoder / rgba16Float TextureConverter / ImagePipeline；BFKitTests 6 项通过，恒等误差 ≤ 1 灰阶；AutoBeauty 接入 BFKit |

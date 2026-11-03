@@ -1,5 +1,4 @@
 import Foundation
-import ImageIO
 import UniformTypeIdentifiers
 import BFKit
 
@@ -68,55 +67,46 @@ print("AutoBeauty 调试工具")
 print("输入：\(options.input.path)")
 print("输出：\(options.output.path)")
 print("BFKit maxLongEdge：\(WorkingLimits.maxLongEdge)")
+
+let converter: TextureConverter?
+do {
+    converter = try TextureConverter()
+    print("工作纹理：rgba16Float（Metal）")
+} catch {
+    converter = nil
+    print("工作纹理：不可用（\(error.localizedDescription)），使用 CPU 恒等路径")
+}
 print("")
 
+let pipeline = ImagePipeline(converter: converter)
 var failures: [String] = []
 var successCount = 0
 
 for url in urls {
     let start = Date()
     do {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            throw NSError(
-                domain: "AutoBeauty",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "解码失败"]
-            )
-        }
-
+        let processed = try pipeline.process(url: url)
         let outputURL = options.output
             .appendingPathComponent(url.deletingPathExtension().lastPathComponent)
             .appendingPathExtension("png")
-        guard let destination = CGImageDestinationCreateWithURL(
-            outputURL as CFURL,
-            UTType.png.identifier as CFString,
-            1,
-            nil
-        ) else {
-            throw NSError(
-                domain: "AutoBeauty",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "无法创建输出文件"]
-            )
-        }
-
-        CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else {
-            throw NSError(
-                domain: "AutoBeauty",
-                code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "写入失败"]
-            )
-        }
+        try ImageEncoder.encode(
+            processed.image,
+            metadata: processed.metadata,
+            to: outputURL,
+            type: .png
+        )
 
         let elapsed = Date().timeIntervalSince(start) * 1000
+        let original = "\(Int(processed.originalSize.width))×\(Int(processed.originalSize.height))"
+        let working = "\(processed.image.width)×\(processed.image.height)"
+        let scaleNote = processed.wasDownscaled ? " [缩放]" : ""
         successCount += 1
         print(String(
-            format: "[OK]   %@  %d×%d  %.1f ms -> %@",
+            format: "[OK]   %@  %@ -> %@%@  %.1f ms -> %@",
             url.lastPathComponent,
-            image.width,
-            image.height,
+            original,
+            working,
+            scaleNote,
             elapsed,
             outputURL.lastPathComponent
         ))

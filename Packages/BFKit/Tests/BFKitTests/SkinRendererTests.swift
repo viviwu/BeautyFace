@@ -337,6 +337,70 @@ final class SkinRendererTests: XCTestCase {
         XCTAssertGreaterThan(eyeDifference, 8, "蒙版内应当有明显变化")
     }
 
+    func testSmoothingFlattensTextureButKeepsHighContrastDetail() throws {
+        let renderer = try makeRenderer()
+        let width = 200
+        let height = 150
+        let barRange = 30..<50
+
+        // 左半：一条 20 像素宽的深色条（模拟眉毛 / 睫毛根部这类高对比结构）；
+        // 右半：低幅度棋盘纹理（模拟毛孔，方差小）。
+        // 磨皮只应压平后者，前者必须保留。
+        let image = try TestSupport.makeImage(width: width, height: height) { x, y in
+            if barRange.contains(x) {
+                return (70, 52, 44, 255)
+            }
+            let texture = (x + y) % 2 == 0 ? 5 : -5
+            return (
+                UInt8(214 + texture),
+                UInt8(168 + texture),
+                UInt8(138 + texture),
+                255
+            )
+        }
+        let mask = SkinMask(
+            width: width / 2,
+            height: height / 2,
+            values: [Float](repeating: 1, count: (width / 2) * (height / 2))
+        )
+
+        let output = try renderer.render(
+            image: image,
+            skinMask: mask,
+            parameters: BeautyParameters(smoothing: 1)
+        )
+        let source = try TestSupport.rgbaBytes(from: image)
+        let bytes = try TestSupport.rgbaBytes(from: output)
+
+        func range(_ data: [UInt8], _ xs: Range<Int>, row: Int) -> Double {
+            let values = xs.map { luma(data, width, x: $0, y: row) }
+            return (values.max() ?? 0) - (values.min() ?? 0)
+        }
+
+        let textureBefore = range(source, 120..<180, row: 30)
+        let textureAfter = range(bytes, 120..<180, row: 30)
+        XCTAssertGreaterThan(textureBefore, 4, "合成图本身应当有可见纹理")
+        XCTAssertLessThan(
+            textureAfter,
+            textureBefore * 0.5,
+            "磨皮应当明显压平低幅度纹理"
+        )
+
+        // 深色条中心与远处皮肤的亮度差，磨皮后应当基本保留。
+        // 实测最大强度下保留约 79%：滤波窗口比深色条略宽，窗口内混入两侧
+        // 皮肤会把条中心抬亮一点，属预期。
+        let edgeBefore = luma(source, width, x: 140, y: 30)
+            - luma(source, width, x: 40, y: 30)
+        let edgeAfter = luma(bytes, width, x: 140, y: 30)
+            - luma(bytes, width, x: 40, y: 30)
+        XCTAssertGreaterThan(edgeBefore, 80)
+        XCTAssertGreaterThan(
+            edgeAfter,
+            edgeBefore * 0.75,
+            "保边滤波不应把高对比结构一起抹掉"
+        )
+    }
+
     private func makeRectMask(
         width: Int,
         height: Int,

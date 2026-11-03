@@ -2,7 +2,7 @@
 
 面向 **macOS（Apple Silicon / arm64）与 iOS** 的人像（面部为主）照片美化 App，同时提供 Swift Package 形式的 SDK。第一版专注于**静态图片**，以头部与面部处理为主，支持多人脸。身体部分只做颈部与肩部的协调，保证脸与躯体过渡自然。
 
-- 状态：M2 完成（Vision 检测与调试），准备进入 M3
+- 状态：M3 完成（皮肤蒙版、磨皮、美白/提亮、预览与全分辨率），准备进入 M4
 - 最后更新：2026-11-03
 - 开发台账（ADR、里程碑、计划）：见 [dev_ledger.md](dev_ledger.md)
 
@@ -57,7 +57,7 @@
 | 功能 | 级别 | 说明 |
 |---|---|---|
 | 美白 / 淡化肤色 | A | 皮肤蒙版内提亮、降低偏色与肤色不均 |
-| 磨皮 | A | 引导滤波 + 高低频分离，保留纹理 |
+| 磨皮 | A | 皮肤蒙版内高低频混合，保留部分纹理；后续升级引导滤波 |
 | 增亮 / 提亮 | A | 面部整体亮度与对比度调整，保留高光 |
 | 亮眼 | A | 巩膜区域提亮，不影响虹膜 |
 | 白牙 | A | 口内低饱和高亮区域校正 |
@@ -223,7 +223,7 @@ BeautyFace/
 核心功能开发阶段使用 `AutoBeauty` 直接读取 `SampleImages/`，无需相册交互与人工点击：
 
 ```bash
-swift run --package-path Tools/AutoBeauty
+swift run --package-path Tools/AutoBeauty AutoBeauty
 ```
 
 - 默认批量处理 `SampleImages/` 下的全部图片
@@ -231,7 +231,10 @@ swift run --package-path Tools/AutoBeauty
 - 支持 `--input <目录>` / `--output <目录>` 覆盖默认路径
 - M1 起已接入 BFKit：解码、EXIF 方向归一、4096 长边缩放、rgba16Float 工作纹理与编码输出
 - M2 起默认检测人脸与人像蒙版，并输出 `_debug.png`（人脸框、76 点关键点、半透明蒙版）
-- `--no-detect` 关闭检测，`--no-mask` 跳过人像蒙版；需指定可执行名，例如 `swift run --package-path Tools/AutoBeauty AutoBeauty --no-mask`
+- M3 起默认输出美化结果，并输出 `_skin.png`（皮肤蒙版灰度图）
+- 参数：`--quality preview|full`、`--smooth <0...1>`、`--white <0...1>`、`--bright <0...1>`
+- 示例：`swift run --package-path Tools/AutoBeauty AutoBeauty --quality preview --smooth 0.5 --white 0.3 --bright 0.2`
+- `--no-detect` 关闭检测与美化，`--no-mask` 跳过人像蒙版（仅肤色）；需指定可执行名
 
 **算法层单独测试**（不需要真机）
 
@@ -248,8 +251,9 @@ swift test
 - **AutoBeauty**：批量处理 `SampleImages/`，输出到 `processed/` 做回归与前后对比。
 - **恒等回归**：合成测试图经 `rgba16Float` 工作纹理往返，最大通道误差 ≤ 1 灰阶。
 - **人脸检测**：样例图检测 1 张脸、拼接图检测 2 张脸；76 点关键点；人像蒙版非空。
+- **皮肤处理**：肤色 + 人像蒙版生成皮肤蒙版，眼/唇多边形排除；恒等参数往返误差 ≤ 1 灰阶。
 - **快照测试**：固定图片与参数，输出与参考图比较，允许少量容差。
-- **背景保护**：蒙版外像素变化接近 0。
+- **背景保护**：蒙版外像素变化接近 0（实测 ≤ 1 灰阶）。
 - **几何检查**：位移场雅可比行列式为正，防止折叠。
 - **真机验收**：两台设备 × 三类素材（前置自拍、4800 万像素原图、多人合影）。
 

@@ -126,7 +126,7 @@
 | M0 | 骨架 | 工程、Swift Package、SwiftUI 空壳、素材目录 | 能选图并显示 | 2–3 天 | 已完成（Mac；真机待补） |
 | M1 | 图像管线 | 解码、EXIF、缩放、rgba16Float、编码输出 | 恒等处理误差 ≤ 1 个灰阶 | 3–4 天 | 已完成（Mac） |
 | M2 | 检测与调试视图 | Vision 脸框、76 点、人像蒙版、多脸、调试绘制 | 样图关键点正确，多脸分别输出 | 4–5 天 | 已完成（Mac） |
-| M3 | 皮肤 | 皮肤蒙版、磨皮、美白/淡化肤色、增亮/提亮、预览与全分辨率 | 边缘无明显伪影，背景不变 | 1 周 | 未开始 |
+| M3 | 皮肤 | 皮肤蒙版、磨皮、美白/淡化肤色、增亮/提亮、预览与全分辨率 | 边缘无明显伪影，背景不变 | 1 周 | 已完成（Mac） |
 | M4 | 局部修饰 | 亮眼、白牙、去黑眼圈、去黑点/痘印 | 效果可控，唇与眼白不被误伤 | 4 天 | 未开始 |
 | M5 | MLS 与脸型 | MLS 求解器、位移场、单次 warp、小脸/瘦脸/窄脸/V 脸/下巴/额头/颧骨 | 大幅度形变无折叠，背景不变形 | 1.5 周 | 未开始 |
 | M6 | 五官形变 | 大眼、眼距、眉间距、眉毛粗细、鼻翼、嘴型 | 五官比例自然 | 1 周 | 未开始 |
@@ -201,6 +201,16 @@
 - **验证**：`SampleImages/musk.jpeg` 与 `vivi.jpeg` 各检测 1 张脸、76 点、蒙版非空；两张样例横向拼接后检测到 2 张脸；BFKitTests 10 项通过。
 - **已知限制**：多脸仅用拼接图验证，尚未使用真实多人合影；后续补拍多人素材。
 
+### 3.3 M3 皮肤（已完成 2026-11-03）
+
+- **参数模型**：BFAlgorithms 新增 `BeautyParameters`（磨皮 / 美白 / 提亮，0...1 自动裁剪，`natural` 预设），保持纯 Swift、无平台依赖。
+- **皮肤蒙版**：`SkinMask` + `SkinMaskGenerator`；长边 512（预览 256）生成，YCbCr 肤色软阈值 × Vision 人像蒙版，眼 / 唇用关键点多边形排除，再做可分离盒式羽化；背景由人像蒙版保护。
+- **渲染**：`SkinRenderer` 用 `MPSImageGaussianBlur` 生成低频，Metal compute kernel 按蒙版混合磨皮，并在蒙版内做亮度提升（美白，含轻微降饱和）与提亮；参数全 0 时与输入一致。
+- **管线**：`BeautyEngine` 串联解码 → 检测 → 皮肤蒙版 → 渲染；预览长边 1024 / 蒙版 256，全分辨率长边 ≤4096 / 蒙版 512，保留 EXIF 与颜色空间。
+- **AutoBeauty**：默认输出 `processed/<name>.png`、`_debug.png`、`_skin.png`；支持 `--quality preview|full` 与 `--smooth` / `--white` / `--bright`。
+- **验证**：BFAlgorithms 4 项、BFKitTests 22 项通过；两张样例与 2000×2000 放大样图均成功；预览 1024×1024、全分辨率 2000×2000；蒙版外像素最大差 ≤1 灰阶；强参数（1/1/1）目视无嘴部 / 眼部环状伪影，背景不变。
+- **已知限制**：当前磨皮为高斯模糊 + 蒙版混合，强参数下纹理保留有限；引导滤波 / 高低频分离留待后续升级。真实多人合影素材仍缺失。
+
 ---
 
 ## 4. 风险登记
@@ -217,6 +227,7 @@
 | R-08 | 程序化美妆写实度不足 | 高 | 低 | 参数调优；允许自定义颜色 | 开放 |
 | R-09 | iOS 18 兼容性无真机验证 | 中 | 中 | 记录在验收中；必要时补一台 iOS 18 设备 | 开放 |
 | R-10 | 免费 Apple ID 签名 7 天失效 | 高 | 低 | 必要时付费开发者账号 | 开放 |
+| R-11 | M3 高斯磨皮在强参数下纹理损失 | 中 | 低 | 限制最大强度；后续升级引导滤波 / 高低频分离 | 开放 |
 
 ---
 
@@ -260,3 +271,4 @@ PhotosPicker 系统相册路径只在非 Debug 模式下验证。
 | 2026-11-03 | iPhone 真机验证推迟到核心功能基本完成后；PhotosPicker 只在非 Debug 验证；`processed/` 加入 .gitignore |
 | 2026-11-03 | M1 完成：ImageDecoder / ImageEncoder / rgba16Float TextureConverter / ImagePipeline；BFKitTests 6 项通过，恒等误差 ≤ 1 灰阶；AutoBeauty 接入 BFKit |
 | 2026-11-03 | M2 完成：FaceDetector（脸框 / 76 点 / 人像蒙版 / 多脸）与 DetectionDebugRenderer；AutoBeauty 输出 `_debug.png`；BFKitTests 10 项通过 |
+| 2026-11-03 | M3 完成：BeautyParameters、皮肤蒙版（肤色 + 人像 + 眼唇排除）、MPS + Metal 磨皮 / 美白 / 提亮、BeautyEngine 预览 / 全分辨率；AutoBeauty 参数与 `_skin.png`；BFKitTests 22 项通过 |

@@ -15,7 +15,11 @@ let package = Package(
         .target(name: "BFKit",
                 dependencies: [.product(name: "BFAlgorithms", package: "BFAlgorithms")],
                 path: "Sources/BFKit"),
-        .testTarget(name: "BFKitTests", dependencies: ["BFKit"],
+        .testTarget(name: "BFKitTests",
+                    dependencies: [
+                        "BFKit",
+                        .product(name: "BFAlgorithms", package: "BFAlgorithms"),
+                    ],
                     path: "Tests/BFKitTests"),
     ]
 )

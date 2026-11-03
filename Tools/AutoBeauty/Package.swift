@@ -10,11 +10,15 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../../Packages/BFKit"),
+        .package(path: "../../Packages/BFAlgorithms"),
     ],
     targets: [
         .executableTarget(
             name: "AutoBeauty",
-            dependencies: [.product(name: "BFKit", package: "BFKit")],
+            dependencies: [
+                .product(name: "BFKit", package: "BFKit"),
+                .product(name: "BFAlgorithms", package: "BFAlgorithms"),
+            ],
             path: "Sources/AutoBeauty"
         ),
     ]

@@ -2,7 +2,11 @@ import CoreGraphics
 import Foundation
 
 public enum DetectionDebugRenderer {
-    public static func render(image: CGImage, result: DetectionResult) -> CGImage? {
+    public static func render(
+        image: CGImage,
+        result: DetectionResult,
+        skinMask: SkinMask? = nil
+    ) -> CGImage? {
         let width = image.width
         let height = image.height
         let colorSpace = image.colorSpace
@@ -31,6 +35,17 @@ public enum DetectionDebugRenderer {
             context.interpolationQuality = .low
             context.draw(
                 maskImage,
+                in: CGRect(x: 0, y: 0, width: width, height: height)
+            )
+            context.interpolationQuality = .none
+        }
+
+        if let skinMask,
+           !skinMask.isEmpty,
+           let skinImage = makeSkinMaskImage(skinMask) {
+            context.interpolationQuality = .low
+            context.draw(
+                skinImage,
                 in: CGRect(x: 0, y: 0, width: width, height: height)
             )
             context.interpolationQuality = .none
@@ -106,6 +121,40 @@ public enum DetectionDebugRenderer {
             bytes[index * 4 + 1] = UInt8(120 * factor)
             bytes[index * 4 + 2] = UInt8(255 * factor)
             bytes[index * 4 + 3] = alpha
+        }
+
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else {
+            return nil
+        }
+
+        return CGImage(
+            width: mask.width,
+            height: mask.height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: mask.width * 4,
+            space: colorSpace,
+            bitmapInfo: CGBitmapInfo(
+                rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+                    | CGBitmapInfo.byteOrder32Big.rawValue
+            ),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )
+    }
+
+    private static func makeSkinMaskImage(_ mask: SkinMask) -> CGImage? {
+        var bytes = [UInt8](repeating: 0, count: mask.values.count * 4)
+        for index in mask.values.indices {
+            let value = min(max(mask.values[index], 0), 1)
+            let alpha = value * 0.45
+            bytes[index * 4] = UInt8(10 * alpha)
+            bytes[index * 4 + 1] = UInt8(230 * alpha)
+            bytes[index * 4 + 2] = UInt8(60 * alpha)
+            bytes[index * 4 + 3] = UInt8(255 * alpha)
         }
 
         guard let provider = CGDataProvider(data: Data(bytes) as CFData),

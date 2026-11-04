@@ -33,6 +33,9 @@ public struct BeautyResult {
     public let originalSize: CGSize
     public let wasDownscaled: Bool
     public let quality: BeautyQuality
+    /// 脸型形变场（未启用脸型时为 nil）。美妆阶段用同一映射变换关键点
+    /// （ADR-007），保证形变与美妆不错位。
+    public let displacementField: DisplacementField?
 
     public init(
         image: CGImage,
@@ -43,7 +46,8 @@ public struct BeautyResult {
         parameters: BeautyParameters,
         originalSize: CGSize,
         wasDownscaled: Bool,
-        quality: BeautyQuality
+        quality: BeautyQuality,
+        displacementField: DisplacementField? = nil
     ) {
         self.image = image
         self.metadata = metadata
@@ -54,20 +58,24 @@ public struct BeautyResult {
         self.originalSize = originalSize
         self.wasDownscaled = wasDownscaled
         self.quality = quality
+        self.displacementField = displacementField
     }
 }
 
-/// M3 美化管线：解码 → 检测 → 皮肤蒙版 → Metal 磨皮/美白/提亮。
+/// M3-M5 美化管线：解码 → 检测 → 蒙版 → 颜色与平滑 → 单次几何 warp。
 public final class BeautyEngine {
     public let detector: FaceDetector
     public let renderer: SkinRenderer
+    public let warpRenderer: WarpRenderer
 
     public init(
         detector: FaceDetector = FaceDetector(),
-        renderer: SkinRenderer? = nil
+        renderer: SkinRenderer? = nil,
+        warpRenderer: WarpRenderer? = nil
     ) throws {
         self.detector = detector
         self.renderer = try renderer ?? SkinRenderer()
+        self.warpRenderer = try warpRenderer ?? WarpRenderer()
     }
 
     public func process(
@@ -127,8 +135,31 @@ public final class BeautyEngine {
             parameters: parameters
         )
 
+        // 几何：颜色处理之后做单次 warp（ADR-007）。
+        var warped = rendered
+        var field: DisplacementField?
+        if !parameters.faceShape.isIdentity {
+            let faces = FaceGeometryConverter.convert(detection: detection)
+            if !faces.isEmpty {
+                field = DisplacementField.solve(
+                    faces: faces,
+                    imageSize: (
+                        width: decoded.image.width,
+                        height: decoded.image.height
+                    ),
+                    parameters: parameters.faceShape
+                )
+                if let field {
+                    warped = try warpRenderer.render(
+                        image: rendered,
+                        field: field
+                    )
+                }
+            }
+        }
+
         return BeautyResult(
-            image: rendered,
+            image: warped,
             metadata: decoded.metadata,
             detection: detection,
             skinMask: skinMask,
@@ -136,7 +167,8 @@ public final class BeautyEngine {
             parameters: parameters,
             originalSize: decoded.originalSize,
             wasDownscaled: decoded.wasDownscaled,
-            quality: quality
+            quality: quality,
+            displacementField: field
         )
     }
 }

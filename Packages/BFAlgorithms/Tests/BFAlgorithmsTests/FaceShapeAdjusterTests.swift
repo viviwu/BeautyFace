@@ -1,0 +1,198 @@
+import XCTest
+@testable import BFAlgorithms
+
+final class FaceShapeAdjusterTests: XCTestCase {
+    /// 合成一张脸：椭圆轮廓（17 点，y 向上）+ 双眼 / 眉 / 鼻 / 唇 / 瞳孔。
+    private func makeFace() -> FaceGeometry {
+        let center = Point2(200, 300)
+        var contour: [Point2] = []
+        for index in 0..<17 {
+            // 从左侧太阳穴（180°）绕过下巴（270°）到右侧太阳穴（0°）
+            let theta = Float.pi * (1 - Float(index) / 16)
+            contour.append(Point2(
+                center.x + 100 * cos(theta),
+                center.y - 130 * sin(theta)
+            ))
+        }
+
+        func cluster(_ origin: Point2) -> [Point2] {
+            (0..<6).map { index in
+                Point2(origin.x + Float(index - 2) * 4, origin.y + Float(index % 2) * 3)
+            }
+        }
+
+        return FaceGeometry(
+            contour: contour,
+            leftEye: cluster(Point2(160, 330)),
+            rightEye: cluster(Point2(240, 330)),
+            leftEyebrow: cluster(Point2(160, 355)),
+            rightEyebrow: cluster(Point2(240, 355)),
+            nose: cluster(Point2(200, 290)),
+            outerLips: cluster(Point2(200, 230)),
+            leftPupil: Point2(160, 331),
+            rightPupil: Point2(240, 331)
+        )
+    }
+
+    private func metrics() -> FaceMetrics {
+        FaceMetrics(makeFace())
+    }
+
+    private func displacement(
+        _ parameters: FaceShapeParameters,
+        _ face: FaceGeometry = FaceShapeAdjusterTests().makeFace()
+    ) -> [Point2] {
+        FaceShapeAdjuster().contourDisplacements(
+            for: face,
+            metrics: FaceMetrics(face),
+            parameters: parameters
+        )
+    }
+
+    func testIdentityParametersGiveZeroDisplacement() {
+        let values = displacement(.none)
+        for value in values {
+            XCTAssertEqual(value.length, 0, accuracy: 1e-6)
+        }
+    }
+
+    func testFaceSizeShrinksTowardCenter() {
+        let face = makeFace()
+        let values = displacement(FaceShapeParameters(faceSize: 1), face)
+        let m = FaceMetrics(face)
+        // 小脸的收缩中心 = 纵轴 x 与轮廓高度中点
+        let center = Point2(m.axisX, m.minY + m.height * 0.5)
+
+        for (index, point) in face.contour.enumerated() {
+            let before = point.distance(to: center)
+            let after = (point + values[index]).distance(to: center)
+            XCTAssertEqual(after, before * 0.9, accuracy: 0.5)
+        }
+    }
+
+    func testJawSlimNarrowsLowerFaceOnly() {
+        let face = makeFace()
+        let values = displacement(FaceShapeParameters(jawSlim: 1), face)
+        let metrics = FaceMetrics(face)
+
+        var narrowedPoints = 0
+        for (index, point) in face.contour.enumerated() {
+            let t = (point.y - metrics.minY) / metrics.height
+            let moved = (point + values[index]).x - metrics.axisX
+            let original = point.x - metrics.axisX
+
+            if (0.08..<0.42).contains(t), abs(original) > 20 {
+                // 下颌角附近应当明显向纵轴收窄
+                XCTAssertLessThan(
+                    abs(moved),
+                    abs(original) - 1.0,
+                    "t=\(t) 处应被收窄"
+                )
+                narrowedPoints += 1
+            } else if t > 0.55 {
+                // 上段轮廓不应受影响
+                XCTAssertEqual(moved, original, accuracy: 1e-5)
+            }
+        }
+        XCTAssertGreaterThanOrEqual(narrowedPoints, 4, "应有多个下颌点被收窄")
+    }
+
+    func testChinLengthensAndNarrows() {
+        let face = makeFace()
+        let values = displacement(FaceShapeParameters(chin: 1), face)
+        let height = FaceMetrics(face).height
+
+        // 下巴底端（t = 0）：向下 0.05 × 脸高，横向不偏移
+        guard let chinIndex = face.contour.indices.min(by: {
+            face.contour[$0].y < face.contour[$1].y
+        }) else {
+            return XCTFail("轮廓不应为空")
+        }
+        XCTAssertEqual(values[chinIndex].y, -0.05 * height, accuracy: 0.5)
+        XCTAssertEqual(values[chinIndex].x, 0, accuracy: 0.5)
+
+        // 太阳穴不应被下巴参数移动
+        guard let topIndex = face.contour.indices.max(by: {
+            face.contour[$0].y < face.contour[$1].y
+        }) else {
+            return XCTFail("轮廓不应为空")
+        }
+        XCTAssertEqual(values[topIndex].length, 0, accuracy: 1e-5)
+    }
+
+    func testForeheadPressesTopContourDown() {
+        let face = makeFace()
+        let values = displacement(FaceShapeParameters(forehead: 1), face)
+        let metrics = FaceMetrics(face)
+
+        for (index, point) in face.contour.enumerated() {
+            let t = (point.y - metrics.minY) / metrics.height
+            if t > 0.95 {
+                // 顶端点应下压 0.05 × 脸高
+                XCTAssertEqual(values[index].y, -0.05 * metrics.height, accuracy: 0.5)
+            } else if t < 0.5 {
+                // 下半张脸不受影响
+                XCTAssertEqual(values[index].length, 0, accuracy: 1e-5)
+            }
+        }
+    }
+
+    func testAllParametersCappedByFaceHeight() {
+        let face = makeFace()
+        let values = displacement(
+            FaceShapeParameters(
+                faceSize: 1,
+                jawSlim: 1,
+                faceNarrow: 1,
+                vShape: 1,
+                chin: 1,
+                forehead: 1,
+                cheekbone: 1
+            ),
+            face
+        )
+        let cap = 0.10 * FaceMetrics(face).height
+        for value in values {
+            XCTAssertLessThanOrEqual(value.length, cap + 1e-4)
+        }
+    }
+
+    func testControlsContainFeatureConstraintsAndAnchors() {
+        let face = makeFace()
+        let adjuster = FaceShapeAdjuster(anchorDivisions: 8)
+        let controls = adjuster.controls(
+            for: face,
+            imageBounds: (width: 800, height: 600),
+            parameters: FaceShapeParameters(jawSlim: 1)
+        )
+
+        // 轮廓点发生了位移
+        let contourSources = Set(face.contour.map { "\($0.x),\($0.y)" })
+        let movedContour = controls.filter {
+            contourSources.contains("\($0.source.x),\($0.source.y)")
+                && $0.source != $0.output
+        }
+        XCTAssertFalse(movedContour.isEmpty, "轮廓控制点应当带位移")
+
+        // 五官点是零位移约束
+        let eyeAnchor = controls.first {
+            $0.source == Point2(160, 331)
+        }
+        XCTAssertNotNil(eyeAnchor)
+        XCTAssertEqual(eyeAnchor?.output, eyeAnchor?.source)
+
+        // 图像边框上有锚点
+        let borderAnchors = controls.filter {
+            $0.source == $0.output
+                && ($0.source.x == 0 || $0.source.x == 800
+                    || $0.source.y == 0 || $0.source.y == 600)
+        }
+        XCTAssertGreaterThanOrEqual(borderAnchors.count, 16)
+    }
+}
+
+private extension Point2 {
+    func distance(to other: Point2) -> Float {
+        distanceSquared(to: other).squareRoot()
+    }
+}

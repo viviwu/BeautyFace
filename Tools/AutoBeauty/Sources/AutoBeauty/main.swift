@@ -1,7 +1,39 @@
 import Foundation
 import UniformTypeIdentifiers
+import CoreGraphics
 import BFAlgorithms
 import BFKit
+
+/// 把位移场幅度渲染成灰度调试图（网格分辨率，按最大值归一）。
+func warpDebugImage(_ field: DisplacementField) -> CGImage? {
+    let count = field.columns * field.rows
+    var magnitudes = [Float](repeating: 0, count: count)
+    var maximum: Float = 0
+    for index in 0..<count {
+        let dx = field.offsetX[index]
+        let dy = field.offsetY[index]
+        let magnitude = (dx * dx + dy * dy).squareRoot()
+        magnitudes[index] = magnitude
+        maximum = max(maximum, magnitude)
+    }
+    guard maximum > 0.01 else { return nil }
+
+    var bytes = [UInt8](repeating: 0, count: count)
+    for index in 0..<count {
+        bytes[index] = UInt8((magnitudes[index] / maximum * 255).rounded())
+    }
+
+    guard let context = CGContext(
+        data: &bytes,
+        width: field.columns,
+        height: field.rows,
+        bitsPerComponent: 8,
+        bytesPerRow: field.columns,
+        space: CGColorSpaceCreateDeviceGray(),
+        bitmapInfo: CGImageAlphaInfo.none.rawValue
+    ) else { return nil }
+    return context.makeImage()
+}
 
 struct Options {
     var input: URL
@@ -91,6 +123,41 @@ func parseOptions() -> Options {
                 parameters.blemishRemoval = BeautyParameters.clamp(value)
                 index += 1
             }
+        case "--face-size":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceShape.faceSize = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--jaw":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceShape.jawSlim = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--narrow":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceShape.faceNarrow = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--v-face":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceShape.vShape = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--chin":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceShape.chin = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--forehead":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceShape.forehead = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--cheekbone":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceShape.cheekbone = BeautyParameters.clamp(value)
+                index += 1
+            }
         case "--no-detect":
             detect = false
         case "--no-mask":
@@ -108,6 +175,13 @@ func parseOptions() -> Options {
               --teeth <0...1>      白牙强度，默认 0.15
               --dark-circle <0...1> 去黑眼圈强度，默认 0.25
               --blemish <0...1>    去黑点/痘印强度，默认 0.30
+              --face-size <0...1>  小脸（整圈轮廓收缩）
+              --jaw <0...1>        瘦脸（下颌收窄）
+              --narrow <0...1>     窄脸（面颊收窄）
+              --v-face <0...1>     V 脸（下半张脸收窄）
+              --chin <0...1>       下巴（加长并收窄）
+              --forehead <0...1>   额头（上段轮廓下压，额头显小）
+              --cheekbone <0...1>  颧骨（收窄）
               --no-detect          跳过检测与美化，输出恒等管线结果
               --no-mask            不使用人像分割蒙版（仅肤色）
             """)
@@ -188,6 +262,19 @@ print(String(
     options.parameters.darkCircleRemoval,
     options.parameters.blemishRemoval
 ))
+if !options.parameters.faceShape.isIdentity {
+    let shape = options.parameters.faceShape
+    print(String(
+        format: "      脸型：小脸=%.2f 瘦脸=%.2f 窄脸=%.2f V脸=%.2f 下巴=%.2f 额头=%.2f 颧骨=%.2f",
+        shape.faceSize,
+        shape.jawSlim,
+        shape.faceNarrow,
+        shape.vShape,
+        shape.chin,
+        shape.forehead,
+        shape.cheekbone
+    ))
+}
 print("")
 
 let pipeline = ImagePipeline(converter: converter)
@@ -319,6 +406,29 @@ for url in urls {
                     type: .png
                 )
                 print("         局部图 -> \(retouchURL.lastPathComponent)")
+            }
+
+            if let field = result.displacementField {
+                print(String(
+                    format: "       形变：网格 %d×%d，最大位移 %.1f px，最小雅可比 %.3f，强度 %.2f",
+                    field.columns,
+                    field.rows,
+                    field.maximumDisplacement(),
+                    field.minimumJacobian(),
+                    field.appliedStrength
+                ))
+                if let warpImage = warpDebugImage(field) {
+                    let warpURL = options.output
+                        .appendingPathComponent(baseName + "_warp")
+                        .appendingPathExtension("png")
+                    try ImageEncoder.encode(
+                        warpImage,
+                        metadata: result.metadata,
+                        to: warpURL,
+                        type: .png
+                    )
+                    print("         形变图 -> \(warpURL.lastPathComponent)")
+                }
             }
         } else {
             let processed = try pipeline.process(

@@ -32,10 +32,15 @@ public struct FaceShapeAdjuster: Sendable {
     // MARK: - 单脸
 
     /// 为一张脸生成控制点。`imageBounds` 为工作图像的像素范围。
+    ///
+    /// `featureControls`：由 `FaceFeatureAdjuster` 生成的五官控制点。
+    /// 传入后五官点由它负责（可带位移）；为 nil 时五官点保持零位移
+    /// 锚点（纯脸型行为，兼容原有调用）。
     public func controls(
         for face: FaceGeometry,
         imageBounds: (width: Float, height: Float),
-        parameters: FaceShapeParameters
+        parameters: FaceShapeParameters,
+        featureControls: [MLSSolver.ControlPoint]? = nil
     ) -> [MLSSolver.ControlPoint] {
         guard !face.contour.isEmpty else { return [] }
 
@@ -56,9 +61,13 @@ public struct FaceShapeAdjuster: Sendable {
                 source: point
             ))
         }
-        // 五官点：零位移约束
-        for point in face.allPoints where !face.contour.contains(where: { $0 == point }) {
-            controls.append(.anchor(point))
+        // 五官点：由五官调整器提供（可带位移），或退化为零位移约束
+        if let featureControls {
+            controls.append(contentsOf: featureControls)
+        } else {
+            for point in face.allPoints where !face.contour.contains(where: { $0 == point }) {
+                controls.append(.anchor(point))
+            }
         }
         // 图像边框锚点
         controls.append(contentsOf: MLSSolver.identityAnchors(

@@ -158,6 +158,36 @@ func parseOptions() -> Options {
                 parameters.faceShape.cheekbone = BeautyParameters.clamp(value)
                 index += 1
             }
+        case "--eye-size":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceFeature.eyeSize = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--eye-dist":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceFeature.eyeDistance = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--brow-space":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceFeature.browSpacing = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--brow-thick":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceFeature.browThickness = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--nose-width":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceFeature.noseWidth = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--mouth":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.faceFeature.mouthShape = BeautyParameters.clamp(value)
+                index += 1
+            }
         case "--no-detect":
             detect = false
         case "--no-mask":
@@ -182,6 +212,12 @@ func parseOptions() -> Options {
               --chin <0...1>       下巴（加长并收窄）
               --forehead <0...1>   额头（上段轮廓下压，额头显小）
               --cheekbone <0...1>  颧骨（收窄）
+              --eye-size <0...1>   大眼（眼眶径向放大）
+              --eye-dist <0...1>   眼距（变窄）
+              --brow-space <0...1> 眉间距（变窄）
+              --brow-thick <0...1> 眉毛粗细（纵向拉伸显浓）
+              --nose-width <0...1> 鼻翼（变窄）
+              --mouth <0...1>      嘴型（嘴角上扬 + 收窄）
               --no-detect          跳过检测与美化，输出恒等管线结果
               --no-mask            不使用人像分割蒙版（仅肤色）
             """)
@@ -273,6 +309,18 @@ if !options.parameters.faceShape.isIdentity {
         shape.chin,
         shape.forehead,
         shape.cheekbone
+    ))
+}
+if !options.parameters.faceFeature.isIdentity {
+    let feature = options.parameters.faceFeature
+    print(String(
+        format: "      五官：大眼=%.2f 眼距=%.2f 眉间距=%.2f 眉粗=%.2f 鼻翼=%.2f 嘴型=%.2f",
+        feature.eyeSize,
+        feature.eyeDistance,
+        feature.browSpacing,
+        feature.browThickness,
+        feature.noseWidth,
+        feature.mouthShape
     ))
 }
 print("")

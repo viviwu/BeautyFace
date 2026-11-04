@@ -46,12 +46,17 @@ public struct DisplacementField {
         faces: [FaceGeometry],
         imageSize: (width: Int, height: Int),
         parameters: FaceShapeParameters,
+        features: FaceFeatureParameters = .none,
         config: Config = Config()
     ) -> DisplacementField? {
-        guard parameters.isIdentity == false else { return nil }
+        guard !parameters.isIdentity || !features.isIdentity else { return nil }
         guard imageSize.width > 0, imageSize.height > 0 else { return nil }
 
         let adjuster = FaceShapeAdjuster(
+            maxDisplacementFraction: config.maxDisplacementFraction,
+            displacementScale: config.displacementScale
+        )
+        let featureAdjuster = FaceFeatureAdjuster(
             maxDisplacementFraction: config.maxDisplacementFraction,
             displacementScale: config.displacementScale
         )
@@ -62,10 +67,16 @@ public struct DisplacementField {
 
         var controls: [MLSSolver.ControlPoint] = []
         for face in faces {
+            // 五官点带位移（参数为零时退化为锚点），轮廓点由脸型驱动
+            let featureControls = featureAdjuster.controls(
+                for: face,
+                parameters: features
+            )
             controls.append(contentsOf: adjuster.controls(
                 for: face,
                 imageBounds: bounds,
-                parameters: parameters
+                parameters: parameters,
+                featureControls: featureControls
             ))
         }
         guard !controls.isEmpty else { return nil }
@@ -177,7 +188,7 @@ public struct DisplacementField {
         }
         let influences: [Influence] = faces.compactMap { face -> Influence? in
             let points = face.allPoints
-            guard let first = points.first else { return nil }
+            guard !points.isEmpty else { return nil }
             var center = Point2.zero
             for point in points {
                 center = center + point

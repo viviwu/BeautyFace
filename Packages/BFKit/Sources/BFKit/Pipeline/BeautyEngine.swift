@@ -33,8 +33,8 @@ public struct BeautyResult {
     public let originalSize: CGSize
     public let wasDownscaled: Bool
     public let quality: BeautyQuality
-    /// 脸型形变场（未启用脸型时为 nil）。美妆阶段用同一映射变换关键点
-    /// （ADR-007），保证形变与美妆不错位。
+    /// 脸型与五官形变场（未启用形变时为 nil）。美妆阶段用同一映射变换
+    /// 关键点（ADR-007），保证形变与美妆不错位。
     public let displacementField: DisplacementField?
 
     public init(
@@ -138,7 +138,7 @@ public final class BeautyEngine {
         // 几何：颜色处理之后做单次 warp（ADR-007）。
         var warped = rendered
         var field: DisplacementField?
-        if !parameters.faceShape.isIdentity {
+        if !parameters.faceShape.isIdentity || !parameters.faceFeature.isIdentity {
             let faces = FaceGeometryConverter.convert(detection: detection)
             if !faces.isEmpty {
                 field = DisplacementField.solve(
@@ -147,7 +147,8 @@ public final class BeautyEngine {
                         width: decoded.image.width,
                         height: decoded.image.height
                     ),
-                    parameters: parameters.faceShape
+                    parameters: parameters.faceShape,
+                    features: parameters.faceFeature
                 )
                 if let field {
                     warped = try warpRenderer.render(

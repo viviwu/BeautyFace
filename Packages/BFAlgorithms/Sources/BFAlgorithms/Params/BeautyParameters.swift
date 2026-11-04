@@ -16,6 +16,8 @@ public struct BeautyParameters: Equatable, Sendable {
     public var blemishRemoval: Float
     /// 脸型形变（小脸 / 瘦脸 / 窄脸 / V 脸 / 下巴 / 额头 / 颧骨）。
     public var faceShape: FaceShapeParameters
+    /// 五官形变（大眼 / 眼距 / 眉间距 / 眉毛粗细 / 鼻翼 / 嘴型）。
+    public var faceFeature: FaceFeatureParameters
 
     public init(
         smoothing: Float = 0,
@@ -25,7 +27,8 @@ public struct BeautyParameters: Equatable, Sendable {
         teethWhitening: Float = 0,
         darkCircleRemoval: Float = 0,
         blemishRemoval: Float = 0,
-        faceShape: FaceShapeParameters = FaceShapeParameters()
+        faceShape: FaceShapeParameters = FaceShapeParameters(),
+        faceFeature: FaceFeatureParameters = FaceFeatureParameters()
     ) {
         self.smoothing = Self.clamp(smoothing)
         self.whitening = Self.clamp(whitening)
@@ -35,6 +38,7 @@ public struct BeautyParameters: Equatable, Sendable {
         self.darkCircleRemoval = Self.clamp(darkCircleRemoval)
         self.blemishRemoval = Self.clamp(blemishRemoval)
         self.faceShape = faceShape
+        self.faceFeature = faceFeature
     }
 
     /// 默认自然预设：轻度磨皮、美白、提亮与局部修饰。
@@ -59,6 +63,7 @@ public struct BeautyParameters: Equatable, Sendable {
             && darkCircleRemoval == 0
             && blemishRemoval == 0
             && faceShape.isIdentity
+            && faceFeature.isIdentity
     }
 
     public static func clamp(_ value: Float) -> Float {

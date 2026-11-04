@@ -1,7 +1,7 @@
 // MARK: - 二维点
 
 /// 纯 Swift 二维点，供算法层使用；BFAlgorithms 不 import Apple 框架（ADR-005）。
-public struct Point2: Equatable, Sendable {
+public struct Point2: Equatable, Hashable, Sendable {
     public var x: Float
     public var y: Float
 

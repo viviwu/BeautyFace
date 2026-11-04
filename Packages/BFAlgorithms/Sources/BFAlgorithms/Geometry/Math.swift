@@ -8,4 +8,12 @@ public enum Math {
         t = min(max(t, 0), 1)
         return t * t * (3 - 2 * t)
     }
+
+    /// 把单调递增的 `taper`（0...1）向「后段集中」陡化：blend 0 返回原函数，
+    /// 1 返回其平方。两端固定为 0 / 1，单调性与 C1 连续性保持不变。
+    /// 等价于在 t 与 t² 之间线性插值，避免引入 pow 依赖（ADR-005）。
+    public static func sharpen(_ taper: Float, blend: Float) -> Float {
+        let b = min(max(blend, 0), 1)
+        return taper * (1 + b * (taper - 1))
+    }
 }

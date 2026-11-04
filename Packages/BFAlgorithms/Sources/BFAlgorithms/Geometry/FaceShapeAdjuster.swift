@@ -7,7 +7,9 @@
 ///    在 MLS 插值下自然形成面颊压缩——这正是瘦脸的观感来源。
 /// 2. **图像边框补零位移锚点**。MLS 的远场会退化为全局刚体变换，
 ///    锚点把背景钉回恒等，否则人脸一动整张图都跟着动。
-/// 3. **位移上限**（R-02）：单点总位移超过 `maxDisplacementFraction × 脸高`
+/// 3. **宽度剖面驱动**：所有收窄参数合成一条单调 C1 锥形函数，保证
+///    轮廓从太阳穴到下巴平滑渐进收窄，不产生波浪或局部外鼓。
+/// 4. **位移上限**（R-02）：单点总位移超过 `maxDisplacementFraction × 脸高`
 ///    时线性压缩，防止参数拉满时把轮廓拉穿。
 public struct FaceShapeAdjuster: Sendable {
     /// 单点位移上限（相对该脸的轮廓高度）。
@@ -69,6 +71,16 @@ public struct FaceShapeAdjuster: Sendable {
     // MARK: - 轮廓位移
 
     /// 各轮廓点的位移，y 向上；「向下」为 −y。
+    ///
+    /// 位移由**目标宽度剖面**驱动：所有收窄类参数（小脸 / 瘦脸 / 窄脸 /
+    /// V 脸 / 颧骨）先线性合成一个总收窄量，再乘一条单调 C1 锥形函数，
+    /// 逐点把横向距离按比例压向纵轴。由构造保证：
+    ///
+    /// 1. 宽度从太阳穴到下巴**单调不增**（V 型渐进收窄）；
+    /// 2. 剖面 C1 平滑——**波浪与局部外鼓在数学上不可能出现**。
+    ///
+    /// 旧实现按参数各自定义 t 区段钟形函数再叠加，宽度剖面会出现振荡
+    /// （两侧波浪）与「腮帮子宽过脸中部」的外鼓，已被此模型取代。
     func contourDisplacements(
         for face: FaceGeometry,
         metrics: FaceMetrics,
@@ -80,59 +92,53 @@ public struct FaceShapeAdjuster: Sendable {
         )
         guard metrics.height > 0, metrics.width > 0 else { return result }
 
+        // 总收窄量：各收窄参数线性合成（0.35 封顶防过度收窄）。
+        let totalNarrow = min(
+            0.10 * parameters.faceSize
+                + 0.10 * parameters.jawSlim
+                + 0.08 * parameters.faceNarrow
+                + 0.10 * parameters.vShape
+                + 0.06 * parameters.cheekbone,
+            0.35
+        )
+        // V 脸把锥形函数向底部陡化：收窄越集中在下半张脸，V 感越强。
+        let vBlend = parameters.vShape
+        let centerY = metrics.minY + metrics.height * 0.5
+
         for (index, point) in face.contour.enumerated() {
-            // t：0 = 下巴底端，1 = 太阳穴顶端
+            // t：0 = 下巴底端，1 = 太阳穴顶端；u：0 = 顶端，1 = 下巴
             let t = (point.y - metrics.minY) / metrics.height
-            // 横向离纵轴的距离（带符号）
+            let u = 1 - t
             let lateral = point.x - metrics.axisX
 
             var displacement = Point2.zero
 
-            // 小脸：整圈向中心收缩
+            // 收窄：锥形在太阳穴附近为 0，向下平滑增至 1；
+            // 逐点按自身横向距离等比压缩，宽度剖面 = 原剖面 × (1 − 收窄量)。
+            if totalNarrow > 0 {
+                let taper = Math.smoothstep(0.10, 0.95, u)
+                displacement.x += -lateral
+                    * (totalNarrow * Math.sharpen(taper, blend: vBlend))
+            }
+
+            // 小脸：纵向向脸高中点轻缩（横向收窄已并入 totalNarrow）
             if parameters.faceSize > 0 {
-                let center = Point2(
-                    metrics.axisX,
-                    metrics.minY + metrics.height * 0.5
-                )
-                displacement = displacement + (center - point) * (0.10 * parameters.faceSize)
+                displacement.y += (centerY - point.y) * (0.06 * parameters.faceSize)
             }
 
-            // 瘦脸：下颌向纵轴收窄，权重峰值在下颌角（t ≈ 0.22）
-            if parameters.jawSlim > 0 {
-                let weight = bump(t, center: 0.22, radius: 0.25)
-                displacement.x += -lateral * 0.10 * parameters.jawSlim * weight
-            }
-
-            // 窄脸：面颊中部收窄
-            if parameters.faceNarrow > 0 {
-                let weight = bump(t, center: 0.60, radius: 0.28)
-                displacement.x += -lateral * 0.08 * parameters.faceNarrow * weight
-            }
-
-            // V 脸：下半张脸收窄，越靠近下巴越强
-            if parameters.vShape > 0 {
-                let weight = Math.smoothstep(0.50, 0.10, t)
-                displacement.x += -lateral * 0.10 * parameters.vShape * weight
-            }
-
-            // 下巴：底部拉长并收窄（显尖）
+            // 下巴：底部拉长并沿锥形方向加一点收窄（显尖）
             if parameters.chin > 0 {
-                let weight = Math.smoothstep(0.15, 0.02, t)
-                displacement.y += -0.05 * metrics.height * parameters.chin * weight
-                displacement.x += -lateral * 0.06 * parameters.chin * weight
+                displacement.y += -0.05 * metrics.height * parameters.chin
+                    * Math.smoothstep(0.15, 0.02, t)
+                displacement.x += -lateral * (0.06 * parameters.chin)
+                    * Math.smoothstep(0.25, 0.0, t)
             }
 
-            // 额头：上段轮廓下压，额头显小
+            // 额头：上段轮廓下压。只做纵向——顶部横向收窄会让宽度剖面
+            // 在太阳穴附近反向变化，破坏单调性。
             if parameters.forehead > 0 {
-                let weight = Math.smoothstep(0.70, 1.00, t)
-                displacement.y += -0.05 * metrics.height * parameters.forehead * weight
-                displacement.x += -lateral * 0.04 * parameters.forehead * weight
-            }
-
-            // 颧骨：颧骨区域收窄
-            if parameters.cheekbone > 0 {
-                let weight = bump(t, center: 0.72, radius: 0.18)
-                displacement.x += -lateral * 0.06 * parameters.cheekbone * weight
+                displacement.y += -0.05 * metrics.height * parameters.forehead
+                    * Math.smoothstep(0.70, 1.00, t)
             }
 
             result[index] = displacement
@@ -159,12 +165,6 @@ public struct FaceShapeAdjuster: Sendable {
             }
             displacements[index] = value
         }
-    }
-
-    /// 以 `center` 为峰、`radius` 为半宽的平滑钟形权重。
-    private func bump(_ t: Float, center: Float, radius: Float) -> Float {
-        let distance = abs(t - center)
-        return Math.smoothstep(radius, 0, distance)
     }
 }
 

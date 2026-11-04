@@ -56,45 +56,102 @@ final class FaceShapeAdjusterTests: XCTestCase {
         }
     }
 
-    func testFaceSizeShrinksTowardCenter() {
+    func testFaceSizeNarrowsTowardAxisAndShrinksVertically() {
         let face = makeFace()
         let values = displacement(FaceShapeParameters(faceSize: 1), face)
         let m = FaceMetrics(face)
-        // 小脸的收缩中心 = 纵轴 x 与轮廓高度中点
-        let center = Point2(m.axisX, m.minY + m.height * 0.5)
+        let centerY = m.minY + m.height * 0.5
 
         for (index, point) in face.contour.enumerated() {
-            let before = point.distance(to: center)
-            let after = (point + values[index]).distance(to: center)
-            XCTAssertEqual(after, before * 0.9, accuracy: 0.5)
+            let lateral = point.x - m.axisX
+            guard abs(lateral) > 10 else { continue }
+            let t = (point.y - m.minY) / m.height
+
+            let moved = (point + values[index]).x - m.axisX
+
+            if t < 0.10 {
+                // 底部：锥形接近 1，收窄约 10%
+                XCTAssertEqual(moved, lateral * 0.9, accuracy: 1.0)
+            } else if t > 0.95 {
+                // 太阳穴顶端：锥形为 0，不动
+                XCTAssertEqual(moved, lateral, accuracy: 1e-4)
+            }
+
+            // 纵向：向脸高中点轻缩 6%
+            let movedY = (point + values[index]).y
+            XCTAssertEqual(movedY, point.y + (centerY - point.y) * 0.06, accuracy: 0.5)
         }
     }
 
-    func testJawSlimNarrowsLowerFaceOnly() {
+    func testJawSlimNarrowsGraduallyFromTempleToChin() {
         let face = makeFace()
         let values = displacement(FaceShapeParameters(jawSlim: 1), face)
         let metrics = FaceMetrics(face)
 
-        var narrowedPoints = 0
+        var checked = 0
         for (index, point) in face.contour.enumerated() {
-            let t = (point.y - metrics.minY) / metrics.height
-            let moved = (point + values[index]).x - metrics.axisX
-            let original = point.x - metrics.axisX
+            let lateral = point.x - metrics.axisX
+            guard abs(lateral) > 20 else { continue }
 
-            if (0.08..<0.42).contains(t), abs(original) > 20 {
-                // 下颌角附近应当明显向纵轴收窄
-                XCTAssertLessThan(
-                    abs(moved),
-                    abs(original) - 1.0,
-                    "t=\(t) 处应被收窄"
-                )
-                narrowedPoints += 1
-            } else if t > 0.55 {
-                // 上段轮廓不应受影响
-                XCTAssertEqual(moved, original, accuracy: 1e-5)
+            let moved = (point + values[index]).x - metrics.axisX
+            let ratio = moved / lateral
+            checked += 1
+
+            if (point.y - metrics.minY) / metrics.height > 0.92 {
+                // 太阳穴顶端附近几乎不动
+                XCTAssertGreaterThan(ratio, 0.99)
+            } else if (point.y - metrics.minY) / metrics.height < 0.2 {
+                // 下颌附近收窄约 10%
+                XCTAssertLessThan(ratio, 0.92)
             }
         }
-        XCTAssertGreaterThanOrEqual(narrowedPoints, 4, "应有多个下颌点被收窄")
+        XCTAssertGreaterThanOrEqual(checked, 6)
+    }
+
+    /// 波浪回归：宽度剖面沿高度必须单调不增（从太阳穴到下巴），
+    /// 且左右两侧一致。旧的「区段钟形叠加」模型会在这里失败。
+    func testWidthProfileIsMonotonicFromTempleToChin() {
+        let face = makeFace()
+        let parameters = FaceShapeParameters(
+            faceSize: 0.5,
+            jawSlim: 1,
+            faceNarrow: 0.6,
+            vShape: 1,
+            chin: 0.6,
+            forehead: 0.4,
+            cheekbone: 0.6
+        )
+        let values = displacement(parameters, face)
+        let metrics = FaceMetrics(face)
+
+        for sideSign in [Float(-1), Float(1)] {
+            var samples: [(t: Float, ratio: Float)] = []
+            for (index, point) in face.contour.enumerated() {
+                let lateral = point.x - metrics.axisX
+                // 只取与纵向轴有实际距离的点（排除下巴底端）
+                guard lateral * sideSign > 15 else { continue }
+                let t = (point.y - metrics.minY) / metrics.height
+                let moved = (point + values[index]).x - metrics.axisX
+                samples.append((t, moved / lateral))
+            }
+            // 按 t 从大到小（太阳穴 → 下巴）排列，收窄比例必须单调不增
+            samples.sort { $0.t > $1.t }
+            for index in 1..<samples.count {
+                XCTAssertLessThanOrEqual(
+                    samples[index].ratio,
+                    samples[index - 1].ratio + 1e-5,
+                    "side=\(sideSign) t=\(samples[index].t) 处宽度剖面出现反向（波浪）"
+                )
+            }
+            // 底部收窄应明显强于顶部（V 型）
+            if samples.count > 2 {
+                XCTAssertLessThan(
+                    samples.last!.ratio,
+                    samples.first!.ratio - 0.05,
+                    "底部收窄应明显强于顶部"
+                )
+            }
+        }
     }
 
     func testChinLengthensAndNarrows() {

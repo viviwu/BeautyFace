@@ -117,6 +117,22 @@
   - `processed/` 为生成物，加入 `.gitignore`，不进入版本库。
   - AutoBeauty 与 App 共享同一处理管线，避免两套实现；M1 起以该工具作为恒等 / 处理回归入口。
 
+### ADR-016 BeautyEngine 拆分为 analyze / render 两步
+- **背景**：M9 要接入滑杆式实时调参。原 `process(...)` 每次调用都重新跑 Vision 检测、人像蒙版、皮肤蒙版与局部修饰蒙版，拖动一次滑杆就要重复数百毫秒到数秒的分析，交互不可接受。
+- **决定**：新增公开的 `BeautyAnalysis`（`DecodedImage` + `DetectionResult` + `SkinMask` + `RetouchMask` + 质量档位），提供 `analyze(decoded:quality:)` 与 `render(analysis:parameters:)`；`process(...)` 保留为两者组合的兼容入口，行为不变。换图时分析一次，调参时只渲染；导出时按 `.full` 重新分析一次（蒙版分辨率与关键点像素坐标随质量档位变化，不能复用预览档蒙版）。
+- **后果**：
+  - AutoBeauty 等一次性调用方无需改动；App 可以做到检测只跑一次。
+  - 质量档位与分析结果必须成对使用，跨档复用蒙版会产生错位。
+  - App 侧需串行化对引擎的访问，并用 generation token 丢弃过期渲染结果。
+
+### ADR-017 App 启动自动载入默认示例照片，真实人像不入库
+- **背景**：需求要求启动即有可处理的照片，用户可再用相册替换；ADR-015 中「App 始终使用 PhotosPicker」的结论与目标冲突。同时真实人像属于隐私素材，不能进入版本库。
+- **决定**：`BeautyStudioView.onAppear` 自动载入 bundle 内 `Resources/DefaultPortrait.jpg`；该 JPG 由 `scripts/install_default_portrait.sh` 从 `SampleImages/IMG_0789.HEIC` 本地生成，加入 `.gitignore`。文件缺失时回退到 `SamplePortrait.swift` 程序化绘制的示意人像。相册（PhotosPicker）与「打开文件」用于替换，工具栏可一键恢复默认图。
+- **后果**：
+  - 取代 ADR-015 中「App 始终使用 PhotosPicker」的表述；AutoBeauty 仍作为无 UI 的批量调试入口。
+  - 干净检出不会缺失资源，但示意人像没有人脸关键点，形变与局部修饰不生效；效果验证需先运行脚本生成真实照片。
+  - 工程使用 Xcode 16 文件同步组，新资源无需手工登记到 pbxproj。
+
 ---
 
 ## 2. 里程碑与状态
@@ -132,7 +148,7 @@
 | M6 | 五官形变 | 大眼、眼距、眉间距、眉毛粗细、鼻翼、嘴型 | 五官比例自然 | 1 周 | 已完成（Mac） |
 | M7 | 程序化美妆 | 口红、腮红、眉毛、眼妆，基于变形后关键点 | 随脸型变形仍对齐 | 1 周 | 未开始 |
 | M8 | 颈肩协调 | 位移衰减、人像蒙版约束、小头联动 | 脸与颈过渡无明显断裂 | 4–5 天 | 未开始 |
-| M9 | App 与 UI | 参数面板、预设、对比、导出 | 完整交互流程可用 | 1.5 周 | 未开始 |
+| M9 | App 与 UI | 参数面板、预设、对比、导出 | 完整交互流程可用 | 1.5 周 | 界面与引擎接入已完成（arm64 交叉编译验证通过；真机与完整流程待验） |
 | M10 | 验收 | 性能、真机矩阵、内存峰值、回归测试 | 通过验收清单 | 1 周 | 未开始 |
 
 合计约 9–10 周（单人估计）。M5 为技术风险最高的里程碑，建议优先打通 MLS 原型。
@@ -338,6 +354,19 @@
 - **验证**：新增 `FaceFeatureAdjusterTests` 10 项（恒等退化为锚点、大眼径向放大且纵向强于横向、眼距整眼平移不畸变且瞳孔随动、眉间距平移、眉粗纵向张开、鼻翼收拢公式、嘴型上扬公式、位移上限、仅五官参数端到端求解、全零返回 nil）。BFAlgorithms 34 项、BFKitTests 38 项通过。
 - **已知限制**：眉毛粗细受限于单条眉线（R-16）；眼角开大 / 下眼睑调整为 B 级，眼部轮廓点偏少，暂不实现。
 
+### 3.9 M9 阶段性：BeautyFaceDemo 接入 BeautyEngine（2026-11-05）
+- **目标**：启动即有待处理照片；左侧竖直功能栏，选中后底部出现对应滑杆（带默认值）；可换图、可导出。
+- **BFKit（ADR-016）**：`BeautyEngine` 新增 `BeautyAnalysis` / `analyze(decoded:quality:)` / `render(analysis:parameters:)`；`process(...)` 退化为兼容组合入口，AutoBeauty 无需改动。
+- **App 代码**（`BeautyFaceDemo/BeautyFaceDemo/`，Xcode 16 文件同步组自动纳入 Target）：
+  - `BeautyControls.swift`：`ParameterDefinition` 用 `WritableKeyPath<BeautyParameters, Float>` 统一顶层参数与嵌套的脸型 / 五官参数；5 个分类共 20 条滑杆；`BeautyDefaults` 作为默认值唯一来源，避免初值 / 预设 / 重置三处漂移；4 档预设。
+  - `BeautyStudioModel.swift`：`@MainActor @Observable`；单条串行队列持有 Metal 引擎；换图分析一次、调参只渲染；50 ms 防抖 + generation token 丢弃过期回传；换图 / 调参 / 换预设时使旧导出 URL 失效；导出按 `.full` 重新分析后编码 PNG；Metal 不可用时仍显示原图。
+  - `BeautyStudioView.swift`：纯 SwiftUI（不引入 AppKit / UIKit）；顶部工具栏、左侧功能栏、中央预览（原图 / 效果切换、人脸数、耗时、状态 / 错误）、底部参数面板（单项与整组重置）；`PhotosPicker` + `fileImporter` 换图。
+  - `SamplePortrait.swift`：无真实照片时的程序化示意人像，保证干净检出也有画面。
+- **工程**：pbxproj 补齐 `XCLocalSwiftPackageReference`（`../Packages/BFAlgorithms`、`../Packages/BFKit`）、`XCSwiftPackageProductDependency` 与 Target 的 `Frameworks` 阶段；`plutil -lint` 通过，对象引用完整。
+- **默认照片（ADR-017）**：`scripts/install_default_portrait.sh` 从 `SampleImages/IMG_0789.HEIC` 生成 1600 长边 JPEG 到 `Resources/DefaultPortrait.jpg`（不入库）；缺失时回退示意人像。
+- **验证**：本机为 Intel `x86_64` + CommandLineTools，无法直接 `xcodebuild`（`Float16` 只在 arm64 可用、无 XCTest、无完整 Xcode）。改用 `--triple arm64-apple-macosx15.0` 交叉编译：`Packages/BFKit`（含 BFAlgorithms）`Build complete!`；把 5 个 App 源文件放进临时 SwiftPM harness，按工程的 Swift 6.2 参数（`-swift-version 5 -default-isolation MainActor` + 两个 upcoming feature）类型检查通过。**未验证**：Xcode 图形界面打开工程、真机运行、实际渲染效果与性能。
+- **待办**：Apple Silicon + Xcode 26 上 `xcodebuild` / 真机验证；M9 完整交互回归；M7 / M8 / M10 仍未开始。
+
 ---
 
 ## 4. 风险登记
@@ -411,3 +440,4 @@ PhotosPicker 系统相册路径只在非 Debug 模式下验证。
 | 2026-11-04 | TextureConverter 上传 / 回读改为 GPU 转换（`u8To16F` / `f16ToU8` 微型 kernel + `rgba8Unorm` 整块搬运），消除两处 29M 次 CPU 逐字节循环：完整管线 6393 → 1081 ms，自然档 + 脸型 1493 ms（Mac debug 构建） |
 | 2026-11-04 | 脸型收窄改为单调 C1 宽度锥形（3.8）：修复实拍图上两侧波浪与腮部外鼓（用户确认），新增宽度剖面单调性回归测试 |
 | 2026-11-04 | M6 完成：6 项五官参数（大眼 / 眼距 / 眉间距 / 眉粗 / 鼻翼 / 嘴型）与 `FaceFeatureAdjuster`，脸型 + 五官合入同一次 MLS 求解与单次 warp；AutoBeauty 新增 6 个 `--eye-size` 等参数；BFAlgorithms 34 项、BFKitTests 38 项通过 |
+| 2026-11-05 | 新增 ADR-016 / ADR-017；M9 阶段性完成：BeautyEngine 拆分 analyze / render，BeautyFaceDemo 接入真实管线并实现工具栏、左侧功能栏、底部滑杆面板、预设 / 对比 / 导出；启动自动载入本地默认示例照片（真实人像不入库）；pbxproj 链接 BFKit / BFAlgorithms；arm64 交叉编译与 UI 类型检查通过，真机验证待补 |

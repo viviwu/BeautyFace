@@ -23,6 +23,31 @@ public enum BeautyQuality: Equatable, Sendable {
     }
 }
 
+/// 与图片、质量绑定的分析结果。检测与蒙版在参数调节期间保持不变，
+/// 由 App 缓存后反复送入 `render(analysis:parameters:)`（README 3.3）。
+/// 质量变化时（预览 → 全分辨率）必须重新分析，因为蒙版分辨率与像素坐标不同。
+public struct BeautyAnalysis {
+    public let decoded: DecodedImage
+    public let detection: DetectionResult
+    public let skinMask: SkinMask
+    public let retouchMask: RetouchMask
+    public let quality: BeautyQuality
+
+    public init(
+        decoded: DecodedImage,
+        detection: DetectionResult,
+        skinMask: SkinMask,
+        retouchMask: RetouchMask,
+        quality: BeautyQuality
+    ) {
+        self.decoded = decoded
+        self.detection = detection
+        self.skinMask = skinMask
+        self.retouchMask = retouchMask
+        self.quality = quality
+    }
+}
+
 public struct BeautyResult {
     public let image: CGImage
     public let metadata: ImageMetadata
@@ -62,7 +87,7 @@ public struct BeautyResult {
     }
 }
 
-/// M3-M5 美化管线：解码 → 检测 → 蒙版 → 颜色与平滑 → 单次几何 warp。
+/// M3-M6 美化管线：解码 → 检测 → 蒙版 → 颜色与平滑 → 单次几何 warp。
 public final class BeautyEngine {
     public let detector: FaceDetector
     public let renderer: SkinRenderer
@@ -115,10 +140,17 @@ public final class BeautyEngine {
         parameters: BeautyParameters = .natural,
         quality: BeautyQuality = .full
     ) throws -> BeautyResult {
+        let analysis = try analyze(decoded: decoded, quality: quality)
+        return try render(analysis: analysis, parameters: parameters)
+    }
+
+    /// 一次性的检测与蒙版生成。结果可跨多次参数调节复用。
+    public func analyze(
+        decoded: DecodedImage,
+        quality: BeautyQuality = .preview
+    ) throws -> BeautyAnalysis {
         let detection = try detector.detect(image: decoded.image)
-        let generator = SkinMaskGenerator(
-            targetLongEdge: quality.maskLongEdge
-        )
+        let generator = SkinMaskGenerator(targetLongEdge: quality.maskLongEdge)
         let skinMask = try generator.generate(
             image: decoded.image,
             detection: detection
@@ -128,10 +160,26 @@ public final class BeautyEngine {
             detection: detection,
             skinMask: skinMask
         )
-        let rendered = try renderer.render(
-            image: decoded.image,
+        return BeautyAnalysis(
+            decoded: decoded,
+            detection: detection,
             skinMask: skinMask,
             retouchMask: retouchMask,
+            quality: quality
+        )
+    }
+
+    /// 用缓存的分析结果渲染：跳过解码、检测与蒙版，只做颜色 / 平滑与几何。
+    /// 拖滑杆时调用此方法，避免每次重新跑 Vision。
+    public func render(
+        analysis: BeautyAnalysis,
+        parameters: BeautyParameters = .natural
+    ) throws -> BeautyResult {
+        let decoded = analysis.decoded
+        let rendered = try renderer.render(
+            image: decoded.image,
+            skinMask: analysis.skinMask,
+            retouchMask: analysis.retouchMask,
             parameters: parameters
         )
 
@@ -139,7 +187,7 @@ public final class BeautyEngine {
         var warped = rendered
         var field: DisplacementField?
         if !parameters.faceShape.isIdentity || !parameters.faceFeature.isIdentity {
-            let faces = FaceGeometryConverter.convert(detection: detection)
+            let faces = FaceGeometryConverter.convert(detection: analysis.detection)
             if !faces.isEmpty {
                 field = DisplacementField.solve(
                     faces: faces,
@@ -162,13 +210,13 @@ public final class BeautyEngine {
         return BeautyResult(
             image: warped,
             metadata: decoded.metadata,
-            detection: detection,
-            skinMask: skinMask,
-            retouchMask: retouchMask,
+            detection: analysis.detection,
+            skinMask: analysis.skinMask,
+            retouchMask: analysis.retouchMask,
             parameters: parameters,
             originalSize: decoded.originalSize,
             wasDownscaled: decoded.wasDownscaled,
-            quality: quality,
+            quality: analysis.quality,
             displacementField: field
         )
     }

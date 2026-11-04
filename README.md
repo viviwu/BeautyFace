@@ -137,20 +137,29 @@
   → 输出：编码保存，保留 EXIF 与颜色配置；Debug 由 AutoBeauty 写入 processed/，Release / iOS 由用户导出
 ```
 
-### 3.2 对外 API（草案）
+### 3.2 对外 API
+
+`BeautyEngine` 把「检测与蒙版」和「渲染」拆成两步，让交互式调参不需要反复跑 Vision：
 
 ```swift
 let engine = try BeautyEngine()
-let analysis = try await engine.analyze(image)              // 检测与蒙版，可缓存
-let preview  = try await engine.render(analysis, params: params, quality: .preview)
-let final    = try await engine.render(analysis, params: params, quality: .full)
+let decoded = try ImageDecoder.decode(data: data, maxLongEdge: BeautyQuality.preview.maxLongEdge)
+let analysis = try engine.analyze(decoded: decoded, quality: .preview)  // 检测 + 皮肤/局部蒙版，可缓存
+let preview = try engine.render(analysis: analysis, parameters: params) // 只重算颜色与形变
+let final   = try engine.render(analysis: fullAnalysis, parameters: params)
+
+// 一次性处理（AutoBeauty / SDK 调用方）仍可用兼容入口：
+let result = try engine.process(decoded: decoded, parameters: params, quality: .full)
 ```
+
+`BeautyAnalysis` 持有 `DecodedImage`、`DetectionResult`、`SkinMask`、`RetouchMask` 与质量档位；`BeautyResult` 返回 `CGImage` 与 `ImageMetadata`。`process(...)` 现在是 `analyze` + `render` 的组合，行为与 M6 完全一致。
 
 ### 3.3 性能与交互策略
 
 - 检测结果与蒙版按图片缓存，调节参数时不重新检测
 - 拖动滑杆时使用 1024 像素的预览代理图，松手或导出时使用 4096 工作图
 - 形变只重算 MLS 与位移场，属于小规模 CPU 计算
+- `BeautyFaceDemo` 的实现：所有耗时工作串行在一条 `DispatchQueue` 上；滑杆变化做 50 ms 防抖；用递增的 generation token 丢弃过期回传，避免换图时旧画面覆盖新照片；导出时按 `.full` 重新分析一次（蒙版分辨率与像素坐标随质量档位变化），再编码为 PNG
 
 ### 3.4 局部修饰（M4）
 
@@ -292,11 +301,25 @@ BeautyFace/
 │       │   └── Pipeline/
 │       └── Tests/BFKitTests/
 ├── BeautyFaceDemo/            SwiftUI App（macOS / iOS）
+│   └── BeautyFaceDemo/
+│       ├── BeautyFaceDemoApp.swift   入口
+│       ├── ContentView.swift        根视图（转交 BeautyStudioView）
+│       ├── BeautyStudioView.swift   工具栏 / 左侧功能栏 / 预览 / 底部参数面板
+│       ├── BeautyStudioModel.swift  BeautyEngine 接入、缓存与调度
+│       ├── BeautyControls.swift     参数定义、分类、预设与默认值
+│       ├── SamplePortrait.swift     无真实照片时的程序化示意人像
+│       └── Resources/
+│           └── DefaultPortrait.jpg  默认示例照片（由脚本生成，.gitignore 排除）
 ├── Tools/
 │   └── AutoBeauty/            macOS 快速调试 CLI
+├── scripts/
+│   ├── check_no_apple_imports.sh    ADR-005 依赖方向检查
+│   └── install_default_portrait.sh  从 SampleImages/ 生成 App 默认照片
 ├── SampleImages/              开发调试素材（由 .gitignore 排除，不入库）
 └── processed/                 AutoBeauty 输出（由 .gitignore 排除，不入库）
 ```
+
+`BeautyFaceDemo.xcodeproj` 使用 Xcode 16 的 `PBXFileSystemSynchronizedRootGroup`（objectVersion 77）：`BeautyFaceDemo/` 目录下新增的 `.swift` 与资源文件会自动进入 Target，不需要手工往 pbxproj 里加文件引用。
 
 ---
 
@@ -310,11 +333,29 @@ BeautyFace/
 
 **运行步骤**
 
-1. 打开 `BeautyFace.xcworkspace`
+1. 打开 `BeautyFace.xcworkspace`（App Target 已显式链接本地包 `BFKit` / `BFAlgorithms`）
 2. 选择 `BeautyFaceDemo` Scheme，目标设备选择 My Mac 或 iOS 设备
 3. Debug 配置使用本机签名（`CODE_SIGN_IDENTITY = "-"`），无需开发者证书；Release 与真机运行仍需有效的 Apple Development 证书
-4. `BeautyFaceDemo` 始终使用 PhotosPicker；系统相册路径只在非 Debug 模式下验证
+4. 启动即自动载入默认示例照片；可用工具栏的「照片图库」或「打开文件」替换，也可一键恢复默认图
 5. iPhone 真机验证推迟到核心功能基本完成后；首次运行需在设备上信任开发者证书
+
+**默认示例照片**
+
+真实人像不入库。首次运行前在本地生成一次：
+
+```bash
+scripts/install_default_portrait.sh                       # 默认读 SampleImages/IMG_0789.HEIC
+scripts/install_default_portrait.sh /path/to/portrait.heic # 也可指定其他照片
+```
+
+脚本用 `sips` 转成 JPEG 并把长边缩到 1600，写入 `BeautyFaceDemo/BeautyFaceDemo/Resources/DefaultPortrait.jpg`（已被 `.gitignore` 排除）。没有这个文件时，App 会自动改用程序化绘制的示意人像，保证任何环境启动都有画面；但示意人像没有人脸关键点，形变与局部修饰不会生效，验证效果仍需真实照片。
+
+**App 界面**
+
+- 顶部工具栏：预设（原图 / 自然 / 精致 / 自定义）、照片图库、打开文件、恢复默认、导出 PNG
+- 左侧竖直功能栏：美肤 / 局部修饰 / 脸型 / 五官 / 预设，切换后底部出现对应滑杆
+- 中央预览：原图 / 效果切换，显示人脸数、渲染耗时、状态与错误
+- 底部参数面板：每组滑杆都有默认值，支持单项重置与整组重置；滑杆写入自动切换为「自定义」
 
 **快速调试（AutoBeauty，仅 macOS）**
 
@@ -388,7 +429,8 @@ macOS（arm64）为正式支持平台；性能验收仍以 iPhone 17 / iPhone Ai
 
 - 图片与处理结果只保存在设备本地。
 - Debug 阶段由 AutoBeauty 写入仓库 `processed/`，仅用于开发调试。
-- Release / iOS 导出仅由用户主动选择（相册或 Files），不读取整个相册。
+- Release / iOS 导出仅由用户主动选择（相册或 Files），不读取整个相册（PhotosPicker 只返回用户选中的那一张）。
+- 默认示例照片含真实人像，只存在于本地构建产物中，不提交到仓库；干净检出会自动回退到程序化示意人像。
 - 不包含任何网络请求或数据上传。
 
 ---

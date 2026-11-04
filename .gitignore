@@ -17,6 +17,9 @@ Packages/*/Package.resolved
 # 真机拍摄的测试素材（体积大、含个人照片，不入库）
 SampleImages/
 
+# App 内置默认示例照片（由 scripts/install_default_portrait.sh 生成，含真实人像，不入库）
+BeautyFaceDemo/BeautyFaceDemo/Resources/DefaultPortrait.jpg
+
 # AutoBeauty 处理输出（不带入仓库）
 processed/
 

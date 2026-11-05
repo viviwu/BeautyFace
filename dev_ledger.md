@@ -146,7 +146,7 @@
 | M4 | 局部修饰 | 亮眼、白牙、去黑眼圈、去黑点/痘印 | 效果可控，唇与眼白不被误伤 | 4 天 | 已完成（Mac） |
 | M5 | MLS 与脸型 | MLS 求解器、位移场、单次 warp、小脸/瘦脸/窄脸/V 脸/下巴/额头/颧骨 | 大幅度形变无折叠，背景不变形 | 1.5 周 | 已完成（Mac） |
 | M6 | 五官形变 | 大眼、眼距、眉间距、眉毛粗细、鼻翼、嘴型 | 五官比例自然 | 1 周 | 已完成（Mac） |
-| M7 | 程序化美妆 | 口红、腮红、眉毛、眼妆，基于变形后关键点 | 随脸型变形仍对齐 | 1 周 | 未开始 |
+| M7 | 程序化美妆 | 口红、腮红、眉毛、眼妆，基于变形后关键点 | 随脸型变形仍对齐 | 1 周 | 已完成（Mac） |
 | M8 | 颈肩协调 | 位移衰减、人像蒙版约束、小头联动 | 脸与颈过渡无明显断裂 | 4–5 天 | 未开始 |
 | M9 | App 与 UI | 参数面板、预设、对比、导出 | 完整交互流程可用 | 1.5 周 | 界面与引擎接入已完成（arm64 交叉编译验证通过；真机与完整流程待验） |
 | M10 | 验收 | 性能、真机矩阵、内存峰值、回归测试 | 通过验收清单 | 1 周 | 未开始 |
@@ -360,7 +360,26 @@
   - 回归测试：五官拉满时轮廓点位移 < 2px；双场叠加雅可比 > 0；轮廓加密点数 = 3×(n−1)+1。BFAlgorithms 37 项、BFKitTests 38 项通过。
 - **产品决策**：自动五官参数保持保守定位（给「80 分底子」）；**手动液化工具**（选区 / 半径 / 拖拽拉伸压缩，笔刷位移直接写入位移场，笔画可撤销）列入计划，作为自动美型的手动微调出口，安排在 M9（App 与 UI）阶段实现。
 
-### 3.9 M9 阶段性：BeautyFaceDemo 接入 BeautyEngine（2026-11-05）
+### 3.9 M7 程序化美妆（已完成 2026-11-05）
+
+- **范围**：口红 / 腮红 / 眉毛加深 / 眼影四路程序化美妆（ADR-007 / ADR-008）：`MakeupParameters`（BFAlgorithms，强度 + 可自定义颜色）、`MakeupMaskGenerator`（BFKit，形变后关键点生成蒙版）、`MakeupRenderer`（Metal 单 pass 合成）；`FaceGeometry` 补 `innerLips`；BeautyEngine 管线变为 颜色 → warp → 美妆 → 编码；AutoBeauty 新增 `--lipstick / --blush / --brow / --shadow`。
+- **实现要点**：
+  - 蒙版：外唇多边形减口内（口内不上色、不参与 MLS）；腮红为眼心—唇心连线颊部椭圆软边；眉毛沿眉形折线撒圆盘补厚度；眼影为上眼睑向上偏移带。蒙版长边 512 + 盒滤波羽化。
+  - 口红**色度替换、亮度保持**：唇纹与明暗完整保留；实测唇色 (95,25,29) → (134,0,16)（红分量 +39，亮度基本不变——亮度 diff 工具看不见色度变化，属正常）。
+  - 初版蒙版几何 bug：非方形图像下椭圆纵坐标用错缩放比（用 `maskW/imgMax`），腮红左右不对称——改为 mask 坐标按轴独立换算。
+- **效果**（`IMG_0789.HEIC`，美妆四项 0.5~0.7）：背景逐像素不变；全流程组合（自然美颜 + 脸型 + 五官 + 美妆）2223 ms（Mac debug）；美妆蒙版随形变关键点对齐（R-06 缓解）。
+- **验证**：新增 `MakeupTests` 5 项（蒙版位置、口内排除、形变跟随、口红保亮度着色、背景不变）。BFKitTests 44 项、BFAlgorithms 37 项通过。
+- **已知限制**：腮红 / 眼影为几何椭圆近似，未做颧骨定位优化；写实度依赖参数调优（R-08 已缓解：亮度保持 + 低权重合成，无「糊一层彩」感）。
+
+### 3.10 AutoBeauty 参数配置文件（2026-11-05）
+
+- **动机**：自动参数只需保证「每功能有效果」，满意程度由用户实时调值——验证改为配置文件驱动，不依赖个人审美挑参。
+- **实现**：`Configs/beauty_default.json`（全功能默认值集中，颜色 `#RRGGBB`）；`BeautyConfig`（CLI 层，BFAlgorithms 保持零 Apple 依赖）：Codable 全字段可省略、hex 校验（拼错报错）、`apply(to:)`。
+- **CLI 行为**：启动自动加载默认配置 → 显式旗标覆盖配置 → `--config <路径>` 换配置 → `--dump-config <路径>` 反向导出（round 2 位小数防 Float 尾数）→ `--no-config` 跳过。
+- **坑**：预扫 config 旗标后 `index` 忘复位，功能旗标循环全部跳过——已修并全流程回归。
+- **验证**：默认加载 / 旗标覆盖 / 导出 / 非法颜色报错 / 单字段迷你配置，全通过。JSON schema 即将来 App 端预设 / 草稿的存储格式。
+
+### 3.11 M9 阶段性：BeautyFaceDemo 接入 BeautyEngine（2026-11-05）
 - **目标**：启动即有待处理照片；左侧竖直功能栏，选中后底部出现对应滑杆（带默认值）；可换图、可导出。
 - **BFKit（ADR-016）**：`BeautyEngine` 新增 `BeautyAnalysis` / `analyze(decoded:quality:)` / `render(analysis:parameters:)`；`process(...)` 退化为兼容组合入口，AutoBeauty 无需改动。
 - **App 代码**（`BeautyFaceDemo/BeautyFaceDemo/`，Xcode 16 文件同步组自动纳入 Target）：
@@ -371,7 +390,7 @@
 - **工程**：pbxproj 补齐 `XCLocalSwiftPackageReference`（`../Packages/BFAlgorithms`、`../Packages/BFKit`）、`XCSwiftPackageProductDependency` 与 Target 的 `Frameworks` 阶段；`plutil -lint` 通过，对象引用完整。
 - **默认照片（ADR-017）**：`scripts/install_default_portrait.sh` 从 `SampleImages/IMG_0789.HEIC` 生成 1600 长边 JPEG 到 `Resources/DefaultPortrait.jpg`（不入库）；缺失时回退示意人像。
 - **验证**：本机为 Intel `x86_64` + CommandLineTools，无法直接 `xcodebuild`（`Float16` 只在 arm64 可用、无 XCTest、无完整 Xcode）。改用 `--triple arm64-apple-macosx15.0` 交叉编译：`Packages/BFKit`（含 BFAlgorithms）`Build complete!`；把 5 个 App 源文件放进临时 SwiftPM harness，按工程的 Swift 6.2 参数（`-swift-version 5 -default-isolation MainActor` + 两个 upcoming feature）类型检查通过。**未验证**：Xcode 图形界面打开工程、真机运行、实际渲染效果与性能。
-- **待办**：Apple Silicon + Xcode 26 上 `xcodebuild` / 真机验证；M9 完整交互回归；M7 / M8 / M10 仍未开始。
+- **待办**：Apple Silicon + Xcode 26 上 `xcodebuild` / 真机验证；M9 完整交互回归；M8 / M10 仍未开始（M7 已完成，见 3.9）。
 
 ---
 
@@ -384,9 +403,9 @@
 | R-03 | 4800 万像素原图内存压力 | 中 | 高 | 4096 上限（ADR-004）；M10 测峰值 | 开放 |
 | R-04 | Vision 在侧脸、遮挡下失败 | 高 | 中 | 检测失败时提示，不强行处理 | 开放 |
 | R-05 | 颜色空间与 Display P3 偏色 | 中 | 中 | 统一工作色彩空间，保留 ICC | 开放 |
-| R-06 | 形变与美妆错位 | 中 | 中 | 美妆使用变形后关键点（ADR-007） | 开放 |
+| R-06 | 形变与美妆错位 | 中 | 中 | 美妆蒙版用 warp 之后的形变关键点生成（ADR-007 / 3.9），实测随形变对齐 | 已缓解 |
 | R-07 | 颈肩过渡显得突兀 | 中 | 低 | 衰减函数，小幅使用（ADR-009） | 开放 |
-| R-08 | 程序化美妆写实度不足 | 高 | 低 | 参数调优；允许自定义颜色 | 开放 |
+| R-08 | 程序化美妆写实度不足 | 高 | 低 | 口红色度替换保亮度（唇纹 / 明暗保留），腮红 / 眼影低权重合成（3.9）；颜色可自定义持续调优 | 已缓解 |
 | R-09 | iOS 18 兼容性无真机验证 | 中 | 中 | 记录在验收中；必要时补一台 iOS 18 设备 | 开放 |
 | R-10 | 免费 Apple ID 签名 7 天失效 | 高 | 低 | 必要时付费开发者账号 | 开放 |
 | R-11 | 磨皮在强参数下纹理损失（已修正） | 中 | 低 | M3 的高斯模糊已在 3.6 换成亮度引导的保边滤波：强边缘保留，纹理压平 | 已修正 |
@@ -448,3 +467,5 @@ PhotosPicker 系统相册路径只在非 Debug 模式下验证。
 | 2026-11-04 | M6 完成：6 项五官参数（大眼 / 眼距 / 眉间距 / 眉粗 / 鼻翼 / 嘴型）与 `FaceFeatureAdjuster`，脸型 + 五官合入同一次 MLS 求解与单次 warp；AutoBeauty 新增 6 个 `--eye-size` 等参数；BFAlgorithms 34 项、BFKitTests 38 项通过 |
 | 2026-11-05 | M6 收尾：脸型/五官**拆为两个独立 MLS 场叠加**（场 B 轮廓沿弧长加密锚定为零），根治五官位移拽动脸缘的波浪；场 A 轮廓控制点 3 倍加密；五官系数按实拍反馈定稿；AutoBeauty 新增 `--dump-edge` 边缘剖面探针（脸侧反向点 0）；BFAlgorithms 37 项、BFKitTests 38 项通过。决策：自动参数保持保守，手动液化工具列入 M9 |
 | 2026-11-05 | 新增 ADR-016 / ADR-017；M9 阶段性完成：BeautyEngine 拆分 analyze / render，BeautyFaceDemo 接入真实管线并实现工具栏、左侧功能栏、底部滑杆面板、预设 / 对比 / 导出；启动自动载入本地默认示例照片（真实人像不入库）；pbxproj 链接 BFKit / BFAlgorithms；arm64 交叉编译与 UI 类型检查通过，真机验证待补 |
+| 2026-11-05 | M7 完成：口红 / 腮红 / 眉毛 / 眼影程序化美妆——形变后关键点生成四路蒙版，Metal 色度替换合成（口内排除），`FaceGeometry.innerLips`，AutoBeauty 新增 4 个美妆参数；BFKitTests 44 项、BFAlgorithms 37 项通过 |
+| 2026-11-05 | AutoBeauty 参数配置文件：默认值集中 `Configs/beauty_default.json`，`--config / --no-config / --dump-config`；调整单字段重新渲染即可逐项验证效果（3.10） |

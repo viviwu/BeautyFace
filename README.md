@@ -264,6 +264,22 @@ let result = try engine.process(decoded: decoded, parameters: params, quality: .
 
 ---
 
+### 3.9 程序化美妆（M7）
+
+口红 / 腮红 / 眉毛加深 / 眼影四路美妆**不依赖美术素材**，由形变后的关键点程序化生成（ADR-007 / ADR-008）：
+
+- **蒙版生成**（`MakeupMaskGenerator`，BFKit）：用 **warp 之后的** `FaceGeometry` 关键点生成四路 0...1 蒙版（长边 512 + 盒滤波羽化）——
+  - 口红：外唇多边形栅格化**减去口内**（`FaceGeometry.innerLips`，口内不上色也不参与 MLS）；
+  - 腮红：眼心到唇心连线的颊部椭圆软边；
+  - 眉毛：沿眉形折线撒圆盘补厚度（Vision 眉毛无厚度轮廓）；
+  - 眼影：上眼睑点向上偏移的眼睑带。
+- **合成**（`MakeupRenderer`，Metal）：在 warp **之后**单 pass 合成——口红用**色度替换、亮度保持**（唇纹与明暗完整保留，实测唇色 (95,25,29) → (134,0,16) 红分量 +39、亮度基本不变）；腮红 / 眼影低权重叠色；眉毛向深色混合。
+- **参数**（`MakeupParameters`，BFAlgorithms）：四项强度各配**可自定义颜色**（gamma 空间 RGB），预设只保存参数不保存素材；管线顺序为 颜色 → warp → 美妆 → 编码。
+
+实测：全流程组合渲染 2223 ms（Mac debug，含形变与美妆）；背景逐像素不变；蒙版随脸型 / 五官形变对齐（形变后关键点驱动）。AutoBeauty 新增 `--lipstick / --blush / --brow / --shadow`。
+
+---
+
 ## 四、技术栈
 
 | 类别 | 选型 | 许可 |
@@ -377,11 +393,35 @@ swift run --package-path Tools/AutoBeauty AutoBeauty
 - M2 起默认检测人脸与人像蒙版，并输出 `_debug.png`（人脸框、76 点关键点、半透明蒙版）
 - M3 起默认输出美化结果，并输出 `_skin.png`（皮肤蒙版灰度图）
 - M4 起同时输出 `_retouch.png`（局部修饰蒙版叠加：青=眼白、黄=牙齿、品红=眼下），终端打印各区域像素数与峰值
-- 参数：`--quality preview|full`、`--smooth <0...1>`、`--white <0...1>`、`--bright <0...1>`
-- 局部修饰参数：`--eye`（亮眼）、`--teeth`（白牙）、`--dark-circle`（去黑眼圈）、`--blemish`（去痘印）
-- 示例：`swift run --package-path Tools/AutoBeauty AutoBeauty --quality preview --smooth 0.5 --white 0.3 --bright 0.2`
-- 只验证局部修饰：`swift run --package-path Tools/AutoBeauty AutoBeauty --smooth 0 --white 0 --bright 0 --eye 1 --teeth 1 --dark-circle 1 --blemish 1`
-- `--no-detect` 关闭检测与美化，`--no-mask` 跳过人像蒙版（仅肤色）；需指定可执行名
+- M5 / M6 起支持脸型与五官形变，输出 `_warp.png`（位移场幅度调试图）
+- `--help` 查看全部旗标
+
+**常用旗标**（强度均 0...1）
+
+- 基础：`--quality preview|full`、`--smooth`（磨皮）、`--white`（美白）、`--bright`（提亮）
+- 局部修饰：`--eye`（亮眼）、`--teeth`（白牙）、`--dark-circle`（去黑眼圈）、`--blemish`（去痘印）
+- 脸型：`--face-size` / `--jaw` / `--narrow` / `--v-face` / `--chin` / `--forehead` / `--cheekbone`
+- 五官：`--eye-size` / `--eye-dist` / `--brow-space` / `--brow-thick` / `--nose-width` / `--mouth`
+- 美妆：`--lipstick` / `--blush` / `--brow` / `--shadow`（颜色在配置文件里改）
+- 开关：`--no-detect`（跳过检测）、`--no-mask`（不用人像蒙版）、`--dump-edge`（边缘剖面探针）
+
+**典型用法**
+
+```bash
+# 1. 默认参数（自动加载 Configs/beauty_default.json）批量处理样张
+swift run --package-path Tools/AutoBeauty AutoBeauty
+
+# 2. 验证单一功能：基础美颜全部置 0，只开目标功能
+swift run --package-path Tools/AutoBeauty AutoBeauty \
+  --smooth 0 --white 0 --bright 0 --eye 0 --teeth 0 --dark-circle 0 --blemish 0 --lipstick 0.8
+
+# 3. 用迷你配置文件验证（只写要开的字段，其余走默认）
+printf '{"faceShape":{"jawSlim":0.6,"vShape":0.5}}' > /tmp/jaw.json
+swift run --package-path Tools/AutoBeauty AutoBeauty --config /tmp/jaw.json --output /tmp/out
+
+# 4. 调出满意的一组值后存档成预设
+swift run --package-path Tools/AutoBeauty AutoBeauty --smooth 0.5 --jaw 0.6 --dump-config ~/my_preset.json
+```
 
 **参数配置文件**
 

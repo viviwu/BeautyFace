@@ -34,6 +34,7 @@ public enum FaceGeometryConverter {
             rightEyebrow: points(.rightEyebrow),
             nose: points(.nose),
             outerLips: points(.outerLips),
+            innerLips: points(.innerLips),
             leftPupil: first(.leftPupil),
             rightPupil: first(.rightPupil)
         )

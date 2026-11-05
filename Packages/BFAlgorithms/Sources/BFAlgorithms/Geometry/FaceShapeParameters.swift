@@ -55,6 +55,8 @@ public struct FaceGeometry: Sendable {
     public var rightEyebrow: [Point2]
     public var nose: [Point2]
     public var outerLips: [Point2]
+    /// 口内轮廓：仅用于美妆蒙版（口红排除口内），不参与 MLS 形变约束。
+    public var innerLips: [Point2]
     public var leftPupil: Point2?
     public var rightPupil: Point2?
 
@@ -66,6 +68,7 @@ public struct FaceGeometry: Sendable {
         rightEyebrow: [Point2] = [],
         nose: [Point2] = [],
         outerLips: [Point2] = [],
+        innerLips: [Point2] = [],
         leftPupil: Point2? = nil,
         rightPupil: Point2? = nil
     ) {
@@ -76,6 +79,7 @@ public struct FaceGeometry: Sendable {
         self.rightEyebrow = rightEyebrow
         self.nose = nose
         self.outerLips = outerLips
+        self.innerLips = innerLips
         self.leftPupil = leftPupil
         self.rightPupil = rightPupil
     }

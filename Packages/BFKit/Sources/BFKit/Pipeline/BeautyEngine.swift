@@ -92,15 +92,18 @@ public final class BeautyEngine {
     public let detector: FaceDetector
     public let renderer: SkinRenderer
     public let warpRenderer: WarpRenderer
+    public let makeupRenderer: MakeupRenderer
 
     public init(
         detector: FaceDetector = FaceDetector(),
         renderer: SkinRenderer? = nil,
-        warpRenderer: WarpRenderer? = nil
+        warpRenderer: WarpRenderer? = nil,
+        makeupRenderer: MakeupRenderer? = nil
     ) throws {
         self.detector = detector
         self.renderer = try renderer ?? SkinRenderer()
         self.warpRenderer = try warpRenderer ?? WarpRenderer()
+        self.makeupRenderer = try makeupRenderer ?? MakeupRenderer()
     }
 
     public func process(
@@ -207,8 +210,32 @@ public final class BeautyEngine {
             }
         }
 
+        // 美妆：几何 warp 之后执行（ADR-007），蒙版用形变后的关键点
+        // 生成，与变形后的五官对齐。
+        var finalImage = warped
+        if !parameters.makeup.isIdentity {
+            let faces = FaceGeometryConverter.convert(detection: analysis.detection)
+            if !faces.isEmpty {
+                let deformed = faces.map {
+                    MakeupMaskGenerator.deformed($0, field: field)
+                }
+                let makeupMask = MakeupMaskGenerator().generate(
+                    faces: deformed,
+                    imageSize: (
+                        width: decoded.image.width,
+                        height: decoded.image.height
+                    )
+                )
+                finalImage = try makeupRenderer.render(
+                    image: warped,
+                    mask: makeupMask,
+                    parameters: parameters.makeup
+                )
+            }
+        }
+
         return BeautyResult(
-            image: warped,
+            image: finalImage,
             metadata: decoded.metadata,
             detection: analysis.detection,
             skinMask: analysis.skinMask,

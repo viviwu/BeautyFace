@@ -1,9 +1,13 @@
-/// 粗网格位移场：把多张脸的控制点合入一次 MLS 求解，在网格节点上
-/// 预先算好位移，供 GPU 重采样时双线性放大。
+/// 粗网格位移场：脸型与五官各建独立 MLS 场、在网格节点上分别求解后
+/// 逐点叠加，供 GPU 重采样时双线性放大。
 ///
 /// 为什么用粗网格（ADR-006）：MLS 在网格节点上一次求解，warp 时只需
 /// 一次双线性采样，避免了逐像素求解；位移场本身是平滑场，粗网格 +
 /// 双线性不会引入台阶。
+///
+/// 为什么拆成两个场：脸型（轮廓位移）与五官（内部点位移）合入同一个
+/// 场时，五官大位移会把脸缘拽出波浪；拆分后五官场的轮廓逐点锚定为零，
+/// 叠加结果的边缘 = 纯脸型剖面，与五官强度无关。
 ///
 /// 折叠防护（R-02）：对网格做有限差分求雅可比行列式，一旦出现 ≤ 0
 /// （逆向映射发生翻转，输出会撕开），按比例整体回退位移并重新求解，
@@ -65,23 +69,51 @@ public struct DisplacementField {
             height: Float(imageSize.height)
         )
 
-        var controls: [MLSSolver.ControlPoint] = []
-        for face in faces {
-            // 五官点带位移（参数为零时退化为锚点），轮廓点由脸型驱动
-            let featureControls = featureAdjuster.controls(
-                for: face,
-                parameters: features
-            )
-            controls.append(contentsOf: adjuster.controls(
-                for: face,
-                imageBounds: bounds,
-                parameters: parameters,
-                featureControls: featureControls
-            ))
+        // 场拆分（轮廓波浪根治）：脸型与五官各建**独立** MLS 场再叠加。
+        //
+        // 之前两者合入同一个场：五官大位移会在脸缘附近与轮廓收窄位移
+        // 互相拉扯，边缘被拽出波浪。拆分后：
+        //
+        // - 场 A（脸型）：轮廓带位移（单调锥形）、五官零位移锚定；
+        // - 场 B（五官）：五官带位移、**轮廓逐点锚定为零**——五官形变
+        //   在 MLS 插值下到不了轮廓，边缘处严格衰减到 ≈ 0。
+        //
+        // 叠加后边缘位移 = 纯锥形剖面，与五官强度无关，波浪在构造上
+        // 不可能出现；五官与轮廓各自的行为也互不干扰，便于分别调参。
+        var controlsShape: [MLSSolver.ControlPoint] = []
+        var controlsFeature: [MLSSolver.ControlPoint] = []
+        if !parameters.isIdentity {
+            for face in faces {
+                controlsShape.append(contentsOf: adjuster.controls(
+                    for: face,
+                    imageBounds: bounds,
+                    parameters: parameters
+                ))
+            }
         }
-        guard !controls.isEmpty else { return nil }
+        if !features.isIdentity {
+            for face in faces {
+                controlsFeature.append(contentsOf: featureAdjuster.controls(
+                    for: face,
+                    parameters: features
+                ))
+                // 场 B 的轮廓锚：把脸缘钉死。必须**沿弧长加密**——只锚
+                // 顶点时，顶点之间（间距 ~200px）是无锚区，五官位移会
+                // 在段间漏出，形成以轮廓段为波长的残余波浪。
+                for point in Self.densifiedContour(face.contour, subdivisions: 8) {
+                    controlsFeature.append(.anchor(point))
+                }
+            }
+            // 仅五官形变时，场 B 自带边框锚
+            if controlsShape.isEmpty {
+                controlsFeature.append(contentsOf: MLSSolver.identityAnchors(
+                    around: (0, 0, bounds.width, bounds.height),
+                    divisions: adjuster.anchorDivisions
+                ))
+            }
+        }
+        guard !controlsShape.isEmpty || !controlsFeature.isEmpty else { return nil }
 
-        let solver = MLSSolver(controls: controls)
         let columns = max(2, Int(
             (Float(config.gridLongEdge)
                 * Float(imageSize.width)
@@ -108,16 +140,45 @@ public struct DisplacementField {
         var strength: Float = 1
         var field: DisplacementField?
         for _ in 0..<config.maxRefinements {
-            field = sampleField(
-                solver: solver,
-                falloff: falloff,
-                imageSize: imageSize,
+            var offsetX: [Float]?
+            var offsetY: [Float]?
+
+            func accumulate(_ controls: [MLSSolver.ControlPoint]) {
+                let solver = MLSSolver(controls: controls)
+                let sampled = sampleOffsets(
+                    solver: solver,
+                    falloff: falloff,
+                    imageSize: imageSize,
+                    columns: columns,
+                    rows: rows,
+                    strength: strength
+                )
+                if var x = offsetX, var y = offsetY {
+                    for index in x.indices {
+                        x[index] += sampled.offsetX[index]
+                        y[index] += sampled.offsetY[index]
+                    }
+                    offsetX = x
+                    offsetY = y
+                } else {
+                    offsetX = sampled.offsetX
+                    offsetY = sampled.offsetY
+                }
+            }
+
+            if !controlsShape.isEmpty { accumulate(controlsShape) }
+            if !controlsFeature.isEmpty { accumulate(controlsFeature) }
+
+            guard let offsetX, let offsetY else { return nil }
+            field = DisplacementField(
                 columns: columns,
                 rows: rows,
-                strength: strength
+                offsetX: offsetX,
+                offsetY: offsetY,
+                imageSize: imageSize,
+                appliedStrength: strength
             )
-            guard let field else { return nil }
-            if field.minimumJacobian() > 0 {
+            if field!.minimumJacobian() > 0 {
                 return field
             }
             // 折叠：整体回退强度重新求解
@@ -129,15 +190,36 @@ public struct DisplacementField {
         return field
     }
 
+    /// 沿折线等弧长加密：每段插 `subdivisions` 个点（含段起点，不含
+    /// 共享终点，末段终点单独补上）。
+    public static func densifiedContour(
+        _ contour: [Point2],
+        subdivisions: Int
+    ) -> [Point2] {
+        guard contour.count > 1, subdivisions > 0 else { return contour }
+        var result: [Point2] = []
+        result.reserveCapacity(contour.count * subdivisions)
+        for index in 0..<(contour.count - 1) {
+            let from = contour[index]
+            let to = contour[index + 1]
+            for step in 0..<subdivisions {
+                let t = Float(step) / Float(subdivisions)
+                result.append(from + (to - from) * t)
+            }
+        }
+        result.append(contour[contour.count - 1])
+        return result
+    }
+
     /// 在网格节点上求解位移：d(v) = (map(v) − v) × 衰减 × 强度。
-    private static func sampleField(
+    private static func sampleOffsets(
         solver: MLSSolver,
         falloff: [Float],
         imageSize: (width: Int, height: Int),
         columns: Int,
         rows: Int,
         strength: Float
-    ) -> DisplacementField? {
+    ) -> (offsetX: [Float], offsetY: [Float]) {
         var offsetX = [Float](repeating: 0, count: columns * rows)
         var offsetY = [Float](repeating: 0, count: columns * rows)
         let stepX = Float(imageSize.width - 1) / Float(columns - 1)
@@ -155,14 +237,7 @@ public struct DisplacementField {
             }
         }
 
-        return DisplacementField(
-            columns: columns,
-            rows: rows,
-            offsetX: offsetX,
-            offsetY: offsetY,
-            imageSize: imageSize,
-            appliedStrength: strength
-        )
+        return (offsetX, offsetY)
     }
 
     /// 每个网格节点的距离衰减权重。

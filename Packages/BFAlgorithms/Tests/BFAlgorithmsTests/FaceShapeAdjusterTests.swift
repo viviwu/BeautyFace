@@ -214,6 +214,54 @@ final class FaceShapeAdjusterTests: XCTestCase {
         }
     }
 
+    func testControlsDensifyContourAlongArcLength() {
+        let face = makeFace()
+        let adjuster = FaceShapeAdjuster(anchorDivisions: 8)
+        let controls = adjuster.controls(
+            for: face,
+            imageBounds: (width: 800, height: 600),
+            parameters: FaceShapeParameters(jawSlim: 1)
+        )
+
+        // 17 点轮廓应加密为 3×(n−1)+1 = 49 个轮廓控制点，
+        // 且新增点的源位置落在原轮廓线段上。
+        let contourSources = Set(face.contour.map { "\($0.x),\($0.y)" })
+        var onSegment = 0
+        for control in controls where contourSources.contains("\(control.source.x),\(control.source.y)") {
+            onSegment += 1
+        }
+        // 原始 17 个顶点 + 非顶点的插值点（插值点不在顶点集合里，
+        // 通过验证其位于相邻顶点的线段上来确认）
+        var interpolatedOnSegments = 0
+        for control in controls {
+            guard !contourSources.contains("\(control.source.x),\(control.source.y)") else { continue }
+            for index in 0..<(face.contour.count - 1) {
+                if liesOnSegment(control.source, face.contour[index], face.contour[index + 1]) {
+                    interpolatedOnSegments += 1
+                    break
+                }
+            }
+        }
+        XCTAssertEqual(onSegment, face.contour.count, "原始顶点应全部保留")
+        XCTAssertEqual(
+            interpolatedOnSegments,
+            (face.contour.count - 1) * 2,
+            "每段应插入 2 个插值控制点"
+        )
+    }
+
+    private func liesOnSegment(_ p: Point2, _ a: Point2, _ b: Point2) -> Bool {
+        let ab = b - a
+        let ap = p - a
+        let cross = ab.x * ap.y - ab.y * ap.x
+        let length = ab.length
+        guard length > 0 else { return false }
+        // 共线且在段内
+        if abs(cross) / length > 1e-3 { return false }
+        let dot = (ap.x * ab.x + ap.y * ab.y) / (length * length)
+        return dot >= -1e-6 && dot <= 1 + 1e-6
+    }
+
     func testControlsContainFeatureConstraintsAndAnchors() {
         let face = makeFace()
         let adjuster = FaceShapeAdjuster(anchorDivisions: 8)

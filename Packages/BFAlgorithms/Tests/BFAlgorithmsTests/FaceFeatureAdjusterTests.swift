@@ -175,7 +175,7 @@ final class FaceFeatureAdjusterTests: XCTestCase {
             XCTAssertEqual(delta.y, 0, accuracy: 1e-5)
             XCTAssertEqual(delta.x.sign == (axisX - point.x).sign, true, "\(point)")
             // 收窄量与横向距离成正比
-            XCTAssertEqual(delta.x, -(point.x - axisX) * 0.18, accuracy: 1e-5)
+            XCTAssertEqual(delta.x, -(point.x - axisX) * 0.32, accuracy: 1e-5)
         }
     }
 
@@ -190,9 +190,9 @@ final class FaceFeatureAdjusterTests: XCTestCase {
         for point in face.outerLips {
             let delta = result[point] ?? .zero
             // 水平收拢
-            XCTAssertEqual(delta.x, -(point.x - center.x) * 0.10, accuracy: 1e-5)
+            XCTAssertEqual(delta.x, -(point.x - center.x) * 0.08, accuracy: 1e-5)
             // 嘴角抬升最强，唇中不动
-            let expectedLift = 0.22 * max(
+            let expectedLift = 0.30 * max(
                 face.outerLips.map { abs($0.y - center.y) }.max()!,
                 halfWidth * 0.3
             ) * ((point.x - center.x) / halfWidth) * ((point.x - center.x) / halfWidth)
@@ -251,5 +251,70 @@ final class FaceFeatureAdjusterTests: XCTestCase {
             features: .none
         )
         XCTAssertNil(field)
+    }
+
+    /// 波浪根治回归：五官位移再大也不能把脸缘拽动——场 B 的轮廓
+    /// 逐点锚定为零，叠加后边缘位移 = 纯脸型剖面。
+    func testFeatureDisplacementDoesNotReachSilhouette() {
+        var face = makeFace()
+        face.leftEye = (0..<8).map { i in
+            Point2(160 + Float(i) * 3, 330 + Float(i % 2) * 6)
+        }
+        face.rightEye = (0..<8).map { i in
+            Point2(240 + Float(i) * 3, 330 + Float(i % 2) * 6)
+        }
+        let field = DisplacementField.solve(
+            faces: [face],
+            imageSize: (width: 800, height: 600),
+            parameters: .none,
+            features: FaceFeatureParameters(
+                eyeSize: 1,
+                eyeDistance: 1,
+                browSpacing: 1,
+                browThickness: 1,
+                noseWidth: 1,
+                mouthShape: 1
+            )
+        )
+        XCTAssertNotNil(field)
+
+        let metrics = FaceMetrics(face)
+        for point in face.contour {
+            let d = field!.displacement(at: point)
+            XCTAssertLessThan(
+                d.length,
+                2.0,
+                "轮廓点 \(point) 被五官形变拽动 \(d.length)px"
+            )
+        }
+        // 五官区域本身仍有明显位移
+        let eyeTop = face.leftEye.max { $0.y < $1.y }!
+        XCTAssertGreaterThan(
+            field!.displacement(at: eyeTop).length,
+            2.0,
+            "眼部区域应有位移"
+        )
+        _ = metrics
+    }
+
+    /// 脸型 + 五官同时启用：叠加场的雅可比仍为正（无折叠）。
+    func testCombinedShapeAndFeatureFieldHasNoFolding() {
+        let field = DisplacementField.solve(
+            faces: [makeFace()],
+            imageSize: (width: 800, height: 600),
+            parameters: FaceShapeParameters(
+                faceSize: 0.5,
+                jawSlim: 1,
+                vShape: 1
+            ),
+            features: FaceFeatureParameters(
+                eyeSize: 1,
+                eyeDistance: 1,
+                noseWidth: 1,
+                mouthShape: 1
+            )
+        )
+        XCTAssertNotNil(field)
+        XCTAssertGreaterThan(field!.minimumJacobian(), 0)
     }
 }

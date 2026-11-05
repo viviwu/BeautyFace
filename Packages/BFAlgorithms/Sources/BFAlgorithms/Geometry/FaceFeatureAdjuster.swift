@@ -100,21 +100,23 @@ public struct FaceFeatureAdjuster: Sendable {
 
             for point in eye {
                 var delta = Point2.zero
-                // 大眼：绕眼睛质心径向外移（纵向 1.67 倍于横向）
+                // 大眼：绕眼睛质心径向外移（纵向 2 倍于横向）。
+                // 横向系数刻意压低：外眼角大幅外推会在颧骨区域与轮廓
+                // 收窄位移打架，把脸缘拽出波浪；显大的主力在纵向。
                 if parameters.eyeSize > 0 {
-                    delta.x += (point.x - center.x) * 0.18 * parameters.eyeSize
-                    delta.y += (point.y - center.y) * 0.30 * parameters.eyeSize
+                    delta.x += (point.x - center.x) * 0.30 * parameters.eyeSize
+                    delta.y += (point.y - center.y) * 0.60 * parameters.eyeSize
                 }
-                // 眼距：整眼平移（相对瞳距归一，p=1 时约移动 10% 瞳距）
+                // 眼距：整眼平移（相对瞳距归一，p=1 时约移动 15% 瞳距）
                 if parameters.eyeDistance > 0 {
-                    delta.x += (eyeAxisX - center.x) * 0.20 * parameters.eyeDistance
+                    delta.x += (eyeAxisX - center.x) * 0.30 * parameters.eyeDistance
                 }
                 add(point, delta)
             }
             // 瞳孔随眼距平移；大眼时瞳孔近似质心、位移≈0，不必动
             if let pupil, parameters.eyeDistance > 0 {
                 add(pupil, Point2(
-                    (eyeAxisX - center.x) * 0.20 * parameters.eyeDistance,
+                    (eyeAxisX - center.x) * 0.30 * parameters.eyeDistance,
                     0
                 ))
             }
@@ -138,10 +140,10 @@ public struct FaceFeatureAdjuster: Sendable {
             for point in brow {
                 var delta = Point2.zero
                 if parameters.browSpacing > 0 {
-                    delta.x += (browAxisX - center.x) * 0.20 * parameters.browSpacing
+                    delta.x += (browAxisX - center.x) * 0.30 * parameters.browSpacing
                 }
                 if parameters.browThickness > 0 {
-                    delta.y += (point.y - center.y) * 0.30 * parameters.browThickness
+                    delta.y += (point.y - center.y) * 0.45 * parameters.browThickness
                 }
                 add(point, delta)
             }
@@ -152,7 +154,7 @@ public struct FaceFeatureAdjuster: Sendable {
             let center = FaceMetrics.centroid(face.nose)
             for point in face.nose {
                 add(point, Point2(
-                    -(point.x - center.x) * 0.18 * parameters.noseWidth,
+                    -(point.x - center.x) * 0.32 * parameters.noseWidth,
                     0
                 ))
             }
@@ -172,9 +174,11 @@ public struct FaceFeatureAdjuster: Sendable {
             if halfWidth > 0, liftReference > 0 {
                 for point in face.outerLips {
                     var delta = Point2.zero
-                    delta.x += -(point.x - center.x) * 0.10 * parameters.mouthShape
+                    // 收窄只是点缀（0.08）：嘴型以嘴角上扬为主，横向
+                    // 收太多会和脸型收窄叠加，导致嘴与脸比例失调。
+                    delta.x += -(point.x - center.x) * 0.08 * parameters.mouthShape
                     let weight = (point.x - center.x) / halfWidth
-                    delta.y += liftReference * 0.22 * parameters.mouthShape
+                    delta.y += liftReference * 0.30 * parameters.mouthShape
                         * weight * weight
                     add(point, delta)
                 }

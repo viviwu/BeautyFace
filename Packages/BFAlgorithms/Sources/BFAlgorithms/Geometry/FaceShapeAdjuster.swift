@@ -52,13 +52,35 @@ public struct FaceShapeAdjuster: Sendable {
         )
 
         var controls: [MLSSolver.ControlPoint] = []
-        controls.reserveCapacity(face.allPoints.count + anchorDivisions * 4)
+        controls.reserveCapacity(
+            face.contour.count * 3 + face.allPoints.count + anchorDivisions * 4
+        )
 
-        // 轮廓点：带位移
-        for (index, point) in face.contour.enumerated() {
+        // 轮廓点：带位移，沿弧长 3 倍加密。
+        // 边缘在输出中是 MLS 在控制点之间插值出来的；五官带大位移时，
+        // 17 个稀疏轮廓点之间的边缘会被内部位移拽出波浪。加密后边缘
+        // 被密集钉在锥形剖面上（位移沿弧长线性插值，剖面保持单调）。
+        let contourCount = face.contour.count
+        if contourCount > 1 {
+            for index in 0..<(contourCount - 1) {
+                let from = face.contour[index]
+                let to = face.contour[index + 1]
+                let fromD = displacements[index]
+                let toD = displacements[index + 1]
+                for step in 0..<3 {
+                    let t = Float(step) / 3
+                    let point = from + (to - from) * t
+                    let displacement = fromD + (toD - fromD) * t
+                    controls.append(MLSSolver.ControlPoint(
+                        output: point + displacement,
+                        source: point
+                    ))
+                }
+            }
+            let last = contourCount - 1
             controls.append(MLSSolver.ControlPoint(
-                output: point + displacements[index],
-                source: point
+                output: face.contour[last] + displacements[last],
+                source: face.contour[last]
             ))
         }
         // 五官点：由五官调整器提供（可带位移），或退化为零位移约束

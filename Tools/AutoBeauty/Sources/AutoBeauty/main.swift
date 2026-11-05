@@ -35,6 +35,32 @@ func warpDebugImage(_ field: DisplacementField) -> CGImage? {
     return context.makeImage()
 }
 
+/// 边缘剖面调试用的脸部度量（BFAlgorithms 的 FaceMetrics 是 internal）。
+struct FaceMetricsBridge {
+    let minY: Float
+    let height: Float
+    let axisX: Float
+
+    init(_ face: FaceGeometry) {
+        guard let first = face.contour.first else {
+            minY = 0; height = 0; axisX = 0
+            return
+        }
+        var minY = first.y, maxY = first.y
+        for p in face.contour {
+            minY = min(minY, p.y)
+            maxY = max(maxY, p.y)
+        }
+        self.minY = minY
+        self.height = maxY - minY
+        if let l = face.leftPupil, let r = face.rightPupil {
+            axisX = (l.x + r.x) * 0.5
+        } else {
+            axisX = (face.contour.map(\.x).min()! + face.contour.map(\.x).max()!) * 0.5
+        }
+    }
+}
+
 struct Options {
     var input: URL
     var output: URL
@@ -42,6 +68,7 @@ struct Options {
     var includeMask: Bool
     var quality: BeautyQuality
     var parameters: BeautyParameters
+    var dumpEdge: Bool
 }
 
 func repositoryRoot() -> URL {
@@ -61,6 +88,7 @@ func parseOptions() -> Options {
     var includeMask = true
     var quality = BeautyQuality.full
     var parameters = BeautyParameters.natural
+    var dumpEdge = false
 
     let arguments = Array(CommandLine.arguments.dropFirst())
     var index = 0
@@ -190,6 +218,8 @@ func parseOptions() -> Options {
             }
         case "--no-detect":
             detect = false
+        case "--dump-edge":
+            dumpEdge = true
         case "--no-mask":
             includeMask = false
         case "-h", "--help":
@@ -234,7 +264,8 @@ func parseOptions() -> Options {
         detect: detect,
         includeMask: includeMask,
         quality: quality,
-        parameters: parameters
+        parameters: parameters,
+        dumpEdge: dumpEdge
     )
 }
 
@@ -465,6 +496,48 @@ for url in urls {
                     field.minimumJacobian(),
                     field.appliedStrength
                 ))
+                if options.dumpEdge {
+                    // 边缘宽度剖面：沿轮廓采样，分左右两侧各自按高度
+                    // 排列，检查「收窄比例」（位移/横向距离）是否沿
+                    // 太阳穴 → 下巴单调递增。波浪 = 比例反向。
+                    // 注意：轮廓点输出位置 = 原位置 − d（d 是采样偏移），
+                    // 收窄量（向轴为正）= d.x × sign(lateral)。
+                    let faces = FaceGeometryConverter.convert(detection: result.detection)
+                    for (faceIndex, face) in faces.enumerated() {
+                        let m = FaceMetricsBridge(face)
+                        print("       脸 \(faceIndex + 1) 边缘剖面（t=1 太阳穴 → 0 下巴，收窄比例）：")
+                        for sideSign in [Float(-1), Float(1)] {
+                            var samples: [(t: Float, ratio: Float)] = []
+                            // 沿轮廓折线加密采样（含段中点）——波浪恰恰
+                            // 藏在顶点之间，只采顶点会漏检
+                            for point in DisplacementField.densifiedContour(
+                                face.contour,
+                                subdivisions: 4
+                            ) {
+                                let lateral = point.x - m.axisX
+                                // 下巴尖端 lateral≈0，比例分母趋零是数值
+                                // 噪声，不参与波浪判定
+                                guard lateral * sideSign > 15 else { continue }
+                                let t = (point.y - m.minY) / max(m.height, 1)
+                                let d = field.displacement(at: point)
+                                let inward = d.x * (lateral > 0 ? 1 : -1)
+                                samples.append((t, inward / abs(lateral)))
+                            }
+                            samples.sort { $0.t > $1.t }
+                            var reversals = 0
+                            for i in 1..<samples.count
+                            where samples[i].ratio < samples[i - 1].ratio - 0.005 {
+                                reversals += 1
+                            }
+                            let side = sideSign < 0 ? "左" : "右"
+                            let line = samples.map {
+                                String(format: "%.2f:%.3f", $0.t, $0.ratio)
+                            }.joined(separator: " ")
+                            print("         \(side)侧 \(line)")
+                            print("         \(side)侧比例反向点（波浪）个数：\(reversals)")
+                        }
+                    }
+                }
                 if let warpImage = warpDebugImage(field) {
                     let warpURL = options.output
                         .appendingPathComponent(baseName + "_warp")

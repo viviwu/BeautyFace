@@ -1,0 +1,38 @@
+{
+  "color" : {
+    "blemishRemoval" : 0.3,
+    "brightening" : 0.2,
+    "darkCircleRemoval" : 0.25,
+    "eyeBrightening" : 0.2,
+    "smoothing" : 0.35,
+    "teethWhitening" : 0.15,
+    "whitening" : 0.25
+  },
+  "faceFeature" : {
+    "browSpacing" : 0,
+    "browThickness" : 0,
+    "eyeDistance" : 0,
+    "eyeSize" : 0,
+    "mouthShape" : 0,
+    "noseWidth" : 0
+  },
+  "faceShape" : {
+    "cheekbone" : 0,
+    "chin" : 0,
+    "faceNarrow" : 0,
+    "faceSize" : 0,
+    "forehead" : 0,
+    "jawSlim" : 0,
+    "vShape" : 0
+  },
+  "makeup" : {
+    "blush" : 0,
+    "blushColor" : "#EB7A85",
+    "brow" : 0,
+    "browColor" : "#291A14",
+    "lipColor" : "#C73847",
+    "lipstick" : 0,
+    "shadow" : 0,
+    "shadowColor" : "#8C5C42"
+  }
+}

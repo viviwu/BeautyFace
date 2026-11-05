@@ -383,6 +383,17 @@ swift run --package-path Tools/AutoBeauty AutoBeauty
 - 只验证局部修饰：`swift run --package-path Tools/AutoBeauty AutoBeauty --smooth 0 --white 0 --bright 0 --eye 1 --teeth 1 --dark-circle 1 --blemish 1`
 - `--no-detect` 关闭检测与美化，`--no-mask` 跳过人像蒙版（仅肤色）；需指定可执行名
 
+**参数配置文件**
+
+各处理功能的默认值集中在 `Configs/beauty_default.json`（JSON，所有字段可省略），
+`AutoBeauty` 启动时自动加载；显式命令行旗标优先于配置值。
+
+- 调整某个功能的值后重新运行即可看效果，其余功能不受影响（值为 0 = 关闭）
+- `--config <路径>`：换一份配置文件（适合做对比：一份只改一个字段的迷你配置）
+- `--no-config`：跳过配置文件，只用代码默认值
+- `--dump-config <路径>`：把当前解析后的参数导出为同格式 JSON——调出满意的一组值后存档成预设
+- 颜色字段用 `#RRGGBB`（口红 / 腮红 / 眉毛 / 眼影），拼错会直接报错而非静默忽略
+
 **算法层单独测试**（不需要真机）
 
 ```bash

@@ -69,6 +69,8 @@ struct Options {
     var quality: BeautyQuality
     var parameters: BeautyParameters
     var dumpEdge: Bool
+    /// 实际加载的配置文件路径（nil = 未加载）。
+    var configPath: String?
 }
 
 func repositoryRoot() -> URL {
@@ -89,9 +91,61 @@ func parseOptions() -> Options {
     var quality = BeautyQuality.full
     var parameters = BeautyParameters.natural
     var dumpEdge = false
+    var configPath: String?
 
     let arguments = Array(CommandLine.arguments.dropFirst())
+
+    // -- 0. 预扫配置相关旗标（配置先于功能旗标应用，后者的显式值可覆盖） --
+    var explicitConfigPath: String?
+    var dumpConfigPath: String?
+    var skipConfig = false
     var index = 0
+    while index < arguments.count {
+        switch arguments[index] {
+        case "--config":
+            if index + 1 < arguments.count {
+                explicitConfigPath = arguments[index + 1]
+                index += 1
+            }
+        case "--dump-config":
+            if index + 1 < arguments.count {
+                dumpConfigPath = arguments[index + 1]
+                index += 1
+            }
+        case "--no-config":
+            skipConfig = true
+        default:
+            break
+        }
+        index += 1
+    }
+
+    if !skipConfig {
+        let url = explicitConfigPath.map { URL(fileURLWithPath: $0) }
+            ?? root.appendingPathComponent("Configs", isDirectory: true)
+                .appendingPathComponent("beauty_default.json")
+        let exists = FileManager.default.fileExists(atPath: url.path)
+        if exists {
+            do {
+                let config = try BeautyConfig.load(from: url)
+                config.apply(to: &parameters)
+                configPath = url.path
+            } catch {
+                FileHandle.standardError.write(Data(
+                    "错误：配置文件 \(url.path) 无效：\(error.localizedDescription)\n".utf8
+                ))
+                exit(1)
+            }
+        } else if explicitConfigPath != nil {
+            FileHandle.standardError.write(Data(
+                "错误：指定的配置文件不存在：\(url.path)\n".utf8
+            ))
+            exit(1)
+        }
+    }
+
+    // -- 1. 功能旗标（覆盖配置值）；index 由预扫推进到末尾，先复位 --
+    index = 0
     while index < arguments.count {
         switch arguments[index] {
         case "--input":
@@ -216,8 +270,33 @@ func parseOptions() -> Options {
                 parameters.faceFeature.mouthShape = BeautyParameters.clamp(value)
                 index += 1
             }
+        case "--lipstick":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.makeup.lipstick = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--blush":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.makeup.blush = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--brow":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.makeup.brow = BeautyParameters.clamp(value)
+                index += 1
+            }
+        case "--shadow":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                parameters.makeup.eyeshadow = BeautyParameters.clamp(value)
+                index += 1
+            }
         case "--no-detect":
             detect = false
+        case "--config", "--dump-config":
+            // 参数已在预扫阶段消费
+            index += 1
+        case "--no-config":
+            break
         case "--dump-edge":
             dumpEdge = true
         case "--no-mask":
@@ -227,6 +306,10 @@ func parseOptions() -> Options {
             用法: AutoBeauty [选项]
               --input <目录>       输入目录，默认 SampleImages/
               --output <目录>      输出目录，默认 processed/
+              --config <路径>      参数配置文件（JSON），默认自动加载
+                                   Configs/beauty_default.json；显式旗标优先于配置
+              --no-config          跳过配置文件，只用代码默认值
+              --dump-config <路径> 把当前解析后的参数导出为同格式 JSON 后退出
               --quality <preview|full>  预览（长边 1024）或全分辨率（长边 4096）
               --smooth <0...1>     磨皮强度，默认 0.35
               --white <0...1>      美白强度，默认 0.25
@@ -248,6 +331,10 @@ func parseOptions() -> Options {
               --brow-thick <0...1> 眉毛粗细（纵向拉伸显浓）
               --nose-width <0...1> 鼻翼（变窄）
               --mouth <0...1>      嘴型（嘴角上扬 + 收窄）
+              --lipstick <0...1>   口红强度（默认玫瑰色）
+              --blush <0...1>      腮红强度（默认粉色）
+              --brow <0...1>       眉毛加深强度
+              --shadow <0...1>     眼影强度（默认大地色）
               --no-detect          跳过检测与美化，输出恒等管线结果
               --no-mask            不使用人像分割蒙版（仅肤色）
             """)
@@ -258,6 +345,24 @@ func parseOptions() -> Options {
         index += 1
     }
 
+    // -- 2. 导出当前解析后的参数（存档满意的一组值） --
+    if let dumpConfigPath {
+        do {
+            let config = BeautyConfig(parameters: parameters)
+            try config.jsonData().write(
+                to: URL(fileURLWithPath: dumpConfigPath),
+                options: .atomic
+            )
+            print("配置已导出：\(dumpConfigPath)")
+        } catch {
+            FileHandle.standardError.write(Data(
+                "错误：导出配置失败：\(error.localizedDescription)\n".utf8
+            ))
+            exit(1)
+        }
+        exit(0)
+    }
+
     return Options(
         input: input,
         output: output,
@@ -265,7 +370,8 @@ func parseOptions() -> Options {
         includeMask: includeMask,
         quality: quality,
         parameters: parameters,
-        dumpEdge: dumpEdge
+        dumpEdge: dumpEdge,
+        configPath: configPath
     )
 }
 
@@ -289,6 +395,7 @@ guard !urls.isEmpty else {
 print("AutoBeauty 调试工具")
 print("输入：\(options.input.path)")
 print("输出：\(options.output.path)")
+print("配置：\(options.configPath ?? "未加载（--no-config 或默认文件不存在）")")
 print("BFKit maxLongEdge：\(WorkingLimits.maxLongEdge)")
 
 let converter: TextureConverter?
@@ -352,6 +459,16 @@ if !options.parameters.faceFeature.isIdentity {
         feature.browThickness,
         feature.noseWidth,
         feature.mouthShape
+    ))
+}
+if !options.parameters.makeup.isIdentity {
+    let makeup = options.parameters.makeup
+    print(String(
+        format: "      美妆：口红=%.2f 腮红=%.2f 眉毛=%.2f 眼影=%.2f",
+        makeup.lipstick,
+        makeup.blush,
+        makeup.brow,
+        makeup.eyeshadow
     ))
 }
 print("")

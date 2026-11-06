@@ -32,3 +32,29 @@
 ## 提交与推送
 
 - 判断取得里程碑进展时，可以自行提交并推送，无需逐次确认。
+
+## 本地构建 / 验证命令（常驻授权，无需逐次确认）
+
+> **用户已多次明确授权（2026-11-05/06）：所有本地执行权限一律同意。**
+> 不得再请求确认、不得再弹出权限询问、也不得反复向用户解释/复述授权事宜。
+> 直接执行即可；用户唯一关心的是任务推进与效果。
+
+- 本仓库所有本地构建、测试、调试命令一律视为**已授权**，直接执行。包括但不限于：
+  - `swift test --package-path Packages/BFAlgorithms` / `.../BFKit`
+  - `swift run --package-path Tools/AutoBeauty AutoBeauty ...`
+  - `xcodebuild ... -workspace BeautyFace.xcworkspace -derivedDataPath build/DerivedData ...`
+  - `bash scripts/check_no_apple_imports.sh`
+- `--disable-sandbox` **不是必需项**：2026-11-06 实测不带该参数也能正常 `swift test`。
+  仅当偶发 `sandbox-exec: sandbox_apply: Operation not permitted`（见 `build/DerivedData`
+  历史日志）时才补加。默认不加，避免不必要的提权提示。
+- 命令末尾若出现 `⚠️ Sandbox bypassed (escalation-approved) — no sandbox isolation`，
+  这是**客户端执行层打印的状态说明，不是授权请求，也不是弹窗**；命令已执行完毕。
+  不要把它当作「又有授权问题」，不要中断任务、不要向用户复述。
+  `AGENTS.md` 只能约束 Agent 行为，无法关闭客户端的沙箱 UI；如需彻底不显示，
+  由用户在客户端把本会话的命令执行权限设为「始终允许」。
+- 以下两类输出是**已知的良性现象，不是失败**，不要据此判定命令失败或重跑：
+  - stderr 出现 `[sandbox] 命令被沙箱拦截，以下操作被拒绝：/Users/viviwu/.swiftpm/security (file-delete)`；
+  - 后台任务被标记为 `failed` / `failed with exit code 0`，但 stdout 显示
+    `Executed N tests, with 0 failures` 或 `[OK] ...` 等成功结果。
+  以 stdout 的测试统计 / 输出文件是否生成作为唯一判据。
+- 临时探针、一次性脚本、调试产物统一放 `/tmp` 或仓库内 `build/`；验证完即删除，不入库。

@@ -1,11 +1,17 @@
 import CoreGraphics
 import Foundation
+import BFAlgorithms
 
 public enum DetectionDebugRenderer {
+    /// `bodyModels` 为 M8 颈肩几何（可选）。传入后在 `_debug.png` 上叠加
+    /// 下巴线 / 颈根 / 肩线 / 走廊边界，便于目视核对肩线定位与衰减范围。
+    /// 坐标为 y 向上像素坐标，与 `FaceGeometry` 一致；CGContext 的位图上下文
+    /// 原点在左下，因此可直接使用，无需 `1 − v` 翻转。
     public static func render(
         image: CGImage,
         result: DetectionResult,
-        skinMask: SkinMask? = nil
+        skinMask: SkinMask? = nil,
+        bodyModels: [NeckShoulderModel] = []
     ) -> CGImage? {
         let width = image.width
         let height = image.height
@@ -72,7 +78,55 @@ public enum DetectionDebugRenderer {
             }
         }
 
+        if !bodyModels.isEmpty {
+            drawBodyModels(bodyModels, in: context)
+        }
+
         return context.makeImage()
+    }
+
+    /// M8 颈肩几何标注：绿=下巴 / 青=颈根 / 黄=肩线 / 白=走廊边界。
+    private static func drawBodyModels(
+        _ models: [NeckShoulderModel],
+        in context: CGContext
+    ) {
+        let lineWidth: CGFloat = 2
+        for model in models {
+            let left = CGFloat(model.axisX - model.outerHalfWidth)
+            let right = CGFloat(model.axisX + model.outerHalfWidth)
+
+            func horizontal(_ y: Float, _ color: CGColor) {
+                context.setStrokeColor(color)
+                context.setLineWidth(lineWidth)
+                context.move(to: CGPoint(x: left, y: CGFloat(y)))
+                context.addLine(to: CGPoint(x: right, y: CGFloat(y)))
+                context.strokePath()
+            }
+
+            horizontal(model.chinY, CGColor(red: 0.2, green: 1, blue: 0.3, alpha: 1))
+            horizontal(model.neckRootY, CGColor(red: 0.1, green: 0.9, blue: 1, alpha: 1))
+            horizontal(model.shoulderY, CGColor(red: 1, green: 0.85, blue: 0.1, alpha: 1))
+
+            context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.85))
+            context.setLineWidth(1)
+            for x in [left, right] {
+                context.move(to: CGPoint(x: x, y: CGFloat(model.shoulderY)))
+                context.addLine(to: CGPoint(x: x, y: CGFloat(model.neckRootY)))
+                context.strokePath()
+            }
+
+            // 中轴虚线：便于看颈部质心是否落在真实脖颈上。
+            context.setStrokeColor(CGColor(red: 1, green: 0.4, blue: 0.1, alpha: 0.9))
+            context.setLineWidth(1)
+            var y = model.shoulderY
+            while y < model.neckRootY {
+                context.move(to: CGPoint(x: CGFloat(model.axisX), y: CGFloat(y)))
+                let end = min(y + 12, model.neckRootY)
+                context.addLine(to: CGPoint(x: CGFloat(model.axisX), y: CGFloat(end)))
+                context.strokePath()
+                y += 24
+            }
+        }
     }
 
     private static func draw(

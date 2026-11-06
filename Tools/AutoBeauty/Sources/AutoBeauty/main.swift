@@ -71,6 +71,21 @@ struct Options {
     var dumpEdge: Bool
     /// 实际加载的配置文件路径（nil = 未加载）。
     var configPath: String?
+    /// M8：关闭颈肩协调，输出 M5 基线用于 A/B 对比。
+    var noBody: Bool
+    /// M8：输出颈部中线剖面与数值探针。
+    var dumpNeck: Bool
+    /// M8：调参用肩线位置（脸高倍数），非 nil 时覆盖蒙版推断。
+    var shoulderLine: Float?
+    /// M8：输出颈肩权重热图 `_body.png`。
+    var dumpBody: Bool
+}
+
+/// M8 调试配置：把 CLI 覆盖值合成到位移场 Config。
+func makeFieldConfig(_ options: Options) -> DisplacementField.Config {
+    var config = DisplacementField.Config()
+    config.shoulderLineFactorOverride = options.shoulderLine
+    return config
 }
 
 func repositoryRoot() -> URL {
@@ -92,6 +107,10 @@ func parseOptions() -> Options {
     var parameters = BeautyParameters.natural
     var dumpEdge = false
     var configPath: String?
+    var noBody = false
+    var dumpNeck = false
+    var shoulderLine: Float?
+    var dumpBody = false
 
     let arguments = Array(CommandLine.arguments.dropFirst())
 
@@ -301,6 +320,17 @@ func parseOptions() -> Options {
             dumpEdge = true
         case "--no-mask":
             includeMask = false
+        case "--no-body":
+            noBody = true
+        case "--dump-neck":
+            dumpNeck = true
+        case "--dump-body":
+            dumpBody = true
+        case "--shoulder-line":
+            if index + 1 < arguments.count, let value = Float(arguments[index + 1]) {
+                shoulderLine = max(0, value)
+                index += 1
+            }
         case "-h", "--help":
             print("""
             用法: AutoBeauty [选项]
@@ -337,6 +367,10 @@ func parseOptions() -> Options {
               --shadow <0...1>     眼影强度（默认大地色）
               --no-detect          跳过检测与美化，输出恒等管线结果
               --no-mask            不使用人像分割蒙版（仅肤色）
+              --no-body            关闭 M8 颈肩协调，输出 M5 基线（A/B 对比）
+              --dump-neck          打印颈部中线 33 点剖面与肩线数值探针
+              --shoulder-line <倍数> 调参用：覆盖肩线位置（颈根下方 N 倍脸高）
+              --dump-body          输出 _body.png 颈肩权重热图
             """)
             exit(0)
         default:
@@ -371,7 +405,11 @@ func parseOptions() -> Options {
         quality: quality,
         parameters: parameters,
         dumpEdge: dumpEdge,
-        configPath: configPath
+        configPath: configPath,
+        noBody: noBody,
+        dumpNeck: dumpNeck,
+        shoulderLine: shoulderLine,
+        dumpBody: dumpBody
     )
 }
 
@@ -423,6 +461,7 @@ if options.detect {
     print("检测：已禁用")
 }
 print("质量：\(options.quality == .preview ? "预览（长边 ≤1024）" : "全分辨率（长边 ≤4096）")")
+print("颈肩（M8）：\(options.noBody ? "关闭（M5 基线）" : "开启")\(options.shoulderLine.map { String(format: "，肩线覆盖 %.2f 倍脸高", $0) } ?? "")")
 print(String(
     format: "参数：磨皮=%.2f 美白=%.2f 提亮=%.2f",
     options.parameters.smoothing,
@@ -484,10 +523,13 @@ for url in urls {
         let baseName = url.deletingPathExtension().lastPathComponent + suffix
 
         if options.detect, let engine {
+            let fieldConfig = makeFieldConfig(options)
             let result = try engine.process(
                 url: url,
                 parameters: options.parameters,
-                quality: options.quality
+                quality: options.quality,
+                bodyCoordination: !options.noBody,
+                fieldConfig: fieldConfig
             )
 
             let outputURL = options.output
@@ -558,10 +600,23 @@ for url in urls {
                 ].joined(separator: "；"))
             }
 
+            // M8：复用一次快照，供 _debug.png 叠加标注、_body.png 热图、
+            // --dump-neck 数值探针使用，避免重复求解。
+            let bodySnapshot = options.noBody ? nil : makeBodyDebugSnapshot(
+                detection: result.detection,
+                imageSize: (
+                    width: result.image.width,
+                    height: result.image.height
+                ),
+                field: result.displacementField,
+                config: fieldConfig
+            )
+
             if let debugImage = DetectionDebugRenderer.render(
                 image: result.image,
                 result: result.detection,
-                skinMask: result.skinMask
+                skinMask: result.skinMask,
+                bodyModels: bodySnapshot?.models ?? []
             ) {
                 let debugURL = options.output
                     .appendingPathComponent(baseName + "_debug")
@@ -666,6 +721,26 @@ for url in urls {
                         type: .png
                     )
                     print("         形变图 -> \(warpURL.lastPathComponent)")
+                }
+            }
+
+            if let snapshot = bodySnapshot {
+                if options.dumpNeck {
+                    for line in bodyDebugLines(snapshot, field: result.displacementField) {
+                        print(line)
+                    }
+                }
+                if options.dumpBody, let bodyImage = bodyDebugImage(snapshot) {
+                    let bodyURL = options.output
+                        .appendingPathComponent(baseName + "_body")
+                        .appendingPathExtension("png")
+                    try ImageEncoder.encode(
+                        bodyImage,
+                        metadata: result.metadata,
+                        to: bodyURL,
+                        type: .png
+                    )
+                    print("         权重图 -> \(bodyURL.lastPathComponent)")
                 }
             }
         } else {

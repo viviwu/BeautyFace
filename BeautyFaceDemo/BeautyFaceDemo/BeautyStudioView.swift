@@ -223,11 +223,63 @@ struct BeautyStudioView: View {
             : (model.previewImage ?? model.originalImage)
     }
 
+    /// 可拖拽分割对比：左半原图、右半效果。整图 Toggle 仍保留；
+    /// 两者同时开启时以整图为准，避免显示逻辑打架。
+    private var splitPreview: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let clamped = min(max(model.splitFraction, 0), 1)
+            ZStack(alignment: .topLeading) {
+                if let effect = model.previewImage ?? model.originalImage {
+                    Image(decorative: effect, scale: 1)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: width, height: geometry.size.height)
+                }
+                if let original = model.originalImage {
+                    Image(decorative: original, scale: 1)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: width, height: geometry.size.height)
+                        .mask {
+                            Rectangle()
+                                .frame(width: width * clamped)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                }
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(width: 2)
+                    .offset(x: width * clamped - 1)
+                    .allowsHitTesting(false)
+                Image(systemName: "chevron.left.chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(6)
+                    .background(Circle().fill(Color.accentColor))
+                    .offset(x: width * clamped - 13,
+                            y: geometry.size.height / 2 - 13)
+                    .allowsHitTesting(false)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        model.splitFraction = Double(value.location.x / max(width, 1))
+                    }
+            )
+        }
+        .padding(18)
+    }
+
     private var previewArea: some View {
         ZStack {
             Color.secondary.opacity(0.08)
 
-            if let image = displayImage {
+            if model.splitComparison && !model.showingOriginal,
+               model.originalImage != nil {
+                splitPreview
+            } else if let image = displayImage {
                 Image(decorative: image, scale: 1)
                     .resizable()
                     .scaledToFit()
@@ -284,11 +336,16 @@ struct BeautyStudioView: View {
                     if model.isRendering {
                         ProgressView().controlSize(.small)
                     }
+                    Toggle(isOn: $model.splitComparison) {
+                        Label("分割对比", systemImage: "square.split.2x1")
+                    }
+                    .toggleStyle(.button)
+                    .platformHelp("拖拽分割线，左侧原图 / 右侧效果")
                     Toggle(isOn: $model.showingOriginal) {
                         Label("原图", systemImage: "eye")
                     }
                     .toggleStyle(.button)
-                    .platformHelp("切换查看原图 / 效果")
+                    .platformHelp("整张切换查看原图 / 效果")
                 }
                 .padding(12)
             }
@@ -312,7 +369,7 @@ struct BeautyStudioView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if !category.parameters.isEmpty {
+                if !category.parameters.isEmpty || !category.colorDefinitions.isEmpty {
                     Button("重置本组") { model.reset(category) }
                         .buttonStyle(.borderless)
                 }
@@ -329,15 +386,38 @@ struct BeautyStudioView: View {
                     presetPanel
                 } else {
                     ScrollView {
-                        LazyVGrid(
-                            columns: [
-                                GridItem(.flexible(minimum: 220), spacing: 20),
-                                GridItem(.flexible(minimum: 220), spacing: 20)
-                            ],
-                            spacing: 14
-                        ) {
-                            ForEach(category.parameters) { definition in
-                                ParameterSlider(definition: definition, model: model)
+                        VStack(alignment: .leading, spacing: 14) {
+                            LazyVGrid(
+                                columns: [
+                                    GridItem(.flexible(minimum: 220), spacing: 20),
+                                    GridItem(.flexible(minimum: 220), spacing: 20)
+                                ],
+                                spacing: 14
+                            ) {
+                                ForEach(category.parameters) { definition in
+                                    ParameterSlider(definition: definition, model: model)
+                                }
+                            }
+
+                            if !category.colorDefinitions.isEmpty {
+                                Divider()
+                                Text("色号")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                LazyVGrid(
+                                    columns: [
+                                        GridItem(.flexible(minimum: 300), spacing: 20),
+                                        GridItem(.flexible(minimum: 300), spacing: 20)
+                                    ],
+                                    spacing: 12
+                                ) {
+                                    ForEach(category.colorDefinitions) { definition in
+                                        MakeupColorControl(
+                                            definition: definition,
+                                            model: model
+                                        )
+                                    }
+                                }
                             }
                         }
                         .padding(.horizontal, 16)
@@ -431,6 +511,73 @@ private extension View {
         #else
         self
         #endif
+    }
+}
+
+/// 单个美妆色号控件：当前色、预设色板、单项重置。
+/// 颜色变更走 `model.setColor(_:for:)`，与滑杆共用 50ms 防抖 +
+/// generation token 的渲染路径，不重新跑 `analyze`。
+private struct MakeupColorControl: View {
+    let definition: MakeupColorDefinition
+    let model: BeautyStudioModel
+
+    private var current: MakeupColor {
+        model.parameters[keyPath: definition.keyPath]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(definition.title).font(.subheadline)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(current.swiftUIColor)
+                    .frame(width: 22, height: 14)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.primary.opacity(0.25), lineWidth: 0.5)
+                    )
+                Text(current.hexString)
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                if current != definition.defaultValue {
+                    Button {
+                        model.reset(definition)
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise.circle")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .platformHelp("恢复默认色号")
+                }
+            }
+
+            HStack(spacing: 7) {
+                ForEach(definition.swatches) { swatch in
+                    Button {
+                        model.setColor(swatch.color, for: definition)
+                    } label: {
+                        Circle()
+                            .fill(swatch.color.swiftUIColor)
+                            .frame(width: 21, height: 21)
+                            .overlay(
+                                Circle()
+                                    .stroke(
+                                        current == swatch.color
+                                            ? Color.accentColor
+                                            : Color.primary.opacity(0.18),
+                                        lineWidth: current == swatch.color ? 2 : 0.5
+                                    )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .platformHelp(swatch.name)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 

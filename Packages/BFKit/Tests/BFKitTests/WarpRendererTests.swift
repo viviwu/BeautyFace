@@ -111,9 +111,13 @@ final class WarpRendererTests: XCTestCase {
         }
         XCTAssertLessThanOrEqual(maxBackgroundDifference, 6, "背景纹理不应被形变拖动")
 
-        // 脸部下颌区域应发生明显变化
+        // 脸部下颌区域应发生明显变化。
+        // 合成脸的 `FaceGeometry` 使用 y 向上像素坐标，轮廓 / 五官落在
+        // y ≈ 170...355；`WarpRenderer` 在上传位移纹理时换算成光栅行序，
+        // 因此实际形变落在 raster y = 600 − [170...355] = 245...430。
+        // 早期这里误写 180...300（匹配了未换算的镜像结果），会漏检真实形变。
         var changedPixels = 0
-        for y in stride(from: 180, to: 300, by: 2) {
+        for y in stride(from: 245, to: 430, by: 2) {
             for x in stride(from: 110, to: 300, by: 2) {
                 let offset = (y * size.width + x) * 4
                 let difference = abs(
@@ -125,6 +129,51 @@ final class WarpRendererTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(changedPixels, 40, "脸部应当被重新整形")
+    }
+
+    /// 锁定 y-up 位移场 → 光栅行序的换算方向，防止形变再次垂直镜像。
+    /// 用上下不对称的单行位移：只在场 row 0（y 向上 = 图像下沿）放位移，
+    /// 渲染后变化必须出现在图像**下沿**，而不是上沿。
+    func testDisplacementFieldMapsYUpToRasterRows() throws {
+        guard let renderer = try? WarpRenderer() else {
+            throw XCTSkip("Metal 不可用")
+        }
+        let size = (width: 128, height: 96)
+        let columns = 16, rows = 12
+        let image = try TestSupport.makeImage(
+            width: size.width, height: size.height
+        ) { x, y in
+            let on = (x / 8) % 2 == 0
+            return on ? (255, 255, 255, 255) : (0, 0, 0, 255)
+        }
+        let field = DisplacementField(
+            columns: columns,
+            rows: rows,
+            offsetX: (0..<(columns * rows)).map {
+                $0 < columns ? 20 : 0
+            }.map(Float.init),
+            offsetY: [Float](repeating: 0, count: columns * rows),
+            imageSize: size,
+            appliedStrength: 1
+        )
+        let output = try renderer.render(image: image, field: field)
+        let source = try TestSupport.rgbaBytes(from: image)
+        let bytes = try TestSupport.rgbaBytes(from: output)
+
+        func changed(in range: Range<Int>) -> Int {
+            var count = 0
+            for y in range {
+                for x in 0..<size.width {
+                    let o = (y * size.width + x) * 4
+                    if abs(Int(source[o]) - Int(bytes[o])) > 8 { count += 1 }
+                }
+            }
+            return count
+        }
+        let top = changed(in: 0..<(size.height / 3))
+        let bottom = changed(in: (size.height * 2 / 3)..<size.height)
+        XCTAssertGreaterThan(bottom, 100, "场 row 0 的位移应落在图像下沿")
+        XCTAssertLessThan(top, bottom / 10, "图像上沿不应被镜像形变")
     }
 
     func testStrongDeformationDoesNotFold() throws {

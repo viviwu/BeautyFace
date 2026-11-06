@@ -109,7 +109,9 @@ public final class BeautyEngine {
     public func process(
         url: URL,
         parameters: BeautyParameters = .natural,
-        quality: BeautyQuality = .full
+        quality: BeautyQuality = .full,
+        bodyCoordination: Bool = true,
+        fieldConfig: DisplacementField.Config = DisplacementField.Config()
     ) throws -> BeautyResult {
         let decoded = try ImageDecoder.decode(
             url: url,
@@ -118,14 +120,18 @@ public final class BeautyEngine {
         return try process(
             decoded: decoded,
             parameters: parameters,
-            quality: quality
+            quality: quality,
+            bodyCoordination: bodyCoordination,
+            fieldConfig: fieldConfig
         )
     }
 
     public func process(
         data: Data,
         parameters: BeautyParameters = .natural,
-        quality: BeautyQuality = .full
+        quality: BeautyQuality = .full,
+        bodyCoordination: Bool = true,
+        fieldConfig: DisplacementField.Config = DisplacementField.Config()
     ) throws -> BeautyResult {
         let decoded = try ImageDecoder.decode(
             data: data,
@@ -134,17 +140,26 @@ public final class BeautyEngine {
         return try process(
             decoded: decoded,
             parameters: parameters,
-            quality: quality
+            quality: quality,
+            bodyCoordination: bodyCoordination,
+            fieldConfig: fieldConfig
         )
     }
 
     public func process(
         decoded: DecodedImage,
         parameters: BeautyParameters = .natural,
-        quality: BeautyQuality = .full
+        quality: BeautyQuality = .full,
+        bodyCoordination: Bool = true,
+        fieldConfig: DisplacementField.Config = DisplacementField.Config()
     ) throws -> BeautyResult {
         let analysis = try analyze(decoded: decoded, quality: quality)
-        return try render(analysis: analysis, parameters: parameters)
+        return try render(
+            analysis: analysis,
+            parameters: parameters,
+            bodyCoordination: bodyCoordination,
+            fieldConfig: fieldConfig
+        )
     }
 
     /// 一次性的检测与蒙版生成。结果可跨多次参数调节复用。
@@ -174,9 +189,15 @@ public final class BeautyEngine {
 
     /// 用缓存的分析结果渲染：跳过解码、检测与蒙版，只做颜色 / 平滑与几何。
     /// 拖滑杆时调用此方法，避免每次重新跑 Vision。
+    ///
+    /// `bodyCoordination` 为 M8 的一键回退开关：置 false 时不向
+    /// `DisplacementField.solve` 传人像蒙版，逐位回到 M5 / M6 行为，
+    /// 用于 A/B 对比与分割质量不佳时的降级（台账 3.12）。
     public func render(
         analysis: BeautyAnalysis,
-        parameters: BeautyParameters = .natural
+        parameters: BeautyParameters = .natural,
+        bodyCoordination: Bool = true,
+        fieldConfig: DisplacementField.Config = DisplacementField.Config()
     ) throws -> BeautyResult {
         let decoded = analysis.decoded
         let rendered = try renderer.render(
@@ -192,6 +213,11 @@ public final class BeautyEngine {
         if !parameters.faceShape.isIdentity || !parameters.faceFeature.isIdentity {
             let faces = FaceGeometryConverter.convert(detection: analysis.detection)
             if !faces.isEmpty {
+                // M8：人像蒙版约束。转换失败（分割缺失 / 尺寸异常）或开关关闭时
+                // personMask 为 nil，solve 逐元素回退到原 falloffTable。
+                let personMask = bodyCoordination
+                    ? PersonMaskConverter.convert(analysis.detection.personMask)
+                    : nil
                 field = DisplacementField.solve(
                     faces: faces,
                     imageSize: (
@@ -199,7 +225,9 @@ public final class BeautyEngine {
                         height: decoded.image.height
                     ),
                     parameters: parameters.faceShape,
-                    features: parameters.faceFeature
+                    features: parameters.faceFeature,
+                    config: fieldConfig,
+                    personMask: personMask
                 )
                 if let field {
                     warped = try warpRenderer.render(

@@ -147,7 +147,7 @@
 | M5 | MLS 与脸型 | MLS 求解器、位移场、单次 warp、小脸/瘦脸/窄脸/V 脸/下巴/额头/颧骨 | 大幅度形变无折叠，背景不变形 | 1.5 周 | 已完成（Mac） |
 | M6 | 五官形变 | 大眼、眼距、眉间距、眉毛粗细、鼻翼、嘴型 | 五官比例自然 | 1 周 | 已完成（Mac） |
 | M7 | 程序化美妆 | 口红、腮红、眉毛、眼妆，基于变形后关键点 | 随脸型变形仍对齐 | 1 周 | 已完成（Mac） |
-| M8 | 颈肩协调 | 位移衰减、人像蒙版约束、小头联动 | 脸与颈过渡无明显断裂 | 4–5 天 | 未开始 |
+| M8 | 颈肩协调 | 沿颈纵向衰减到肩线为 0、人像蒙版内约束（A 级）；小头联动拆出 M8.1（B 级，见 3.12） | 脸与颈过渡无明显断裂；肩线以下与人像蒙版外位移严格 0；背景 / 白 T 恤逐像素不变 | 4–5 天 | **已完成（Mac，2026-11-06）**：双素材数值验收通过、A/B 目视过渡连续；R-07 已缓解 |
 | M9 | App 与 UI | 参数面板、预设、对比、导出 | 完整交互流程可用 | 1.5 周 | 界面与引擎接入已完成（arm64 交叉编译验证通过；真机与完整流程待验） |
 | M10 | 验收 | 性能、真机矩阵、内存峰值、回归测试 | 通过验收清单 | 1 周 | 未开始 |
 
@@ -390,7 +390,125 @@
 - **工程**：pbxproj 补齐 `XCLocalSwiftPackageReference`（`../Packages/BFAlgorithms`、`../Packages/BFKit`）、`XCSwiftPackageProductDependency` 与 Target 的 `Frameworks` 阶段；`plutil -lint` 通过，对象引用完整。
 - **默认照片（ADR-017）**：`scripts/install_default_portrait.sh` 从 `SampleImages/IMG_0789.HEIC` 生成 1600 长边 JPEG 到 `Resources/DefaultPortrait.jpg`（不入库）；缺失时回退示意人像。
 - **验证**：本机为 Intel `x86_64` + CommandLineTools，无法直接 `xcodebuild`（`Float16` 只在 arm64 可用、无 XCTest、无完整 Xcode）。改用 `--triple arm64-apple-macosx15.0` 交叉编译：`Packages/BFKit`（含 BFAlgorithms）`Build complete!`；把 5 个 App 源文件放进临时 SwiftPM harness，按工程的 Swift 6.2 参数（`-swift-version 5 -default-isolation MainActor` + 两个 upcoming feature）类型检查通过。**未验证**：Xcode 图形界面打开工程、真机运行、实际渲染效果与性能。
-- **待办**：Apple Silicon + Xcode 26 上 `xcodebuild` / 真机验证；M9 完整交互回归；M8 / M10 仍未开始（M7 已完成，见 3.9）。
+- **待办**：iPhone 真机验证（约定后置）；M9 完整交互回归（手动液化、App 端 JSON 预设持久化、PhotosPicker 非 Debug 路径）；M8.1 小头联动（Q-05）；M10 验收未开始。M8 已完成（Mac），本轮 App 侧用 SwiftPM harness 全量类型检查通过；`xcodebuild` 在本机受嵌套沙箱限制无法解析本地包，已如实记录（见 3.12 实现记录）。
+
+### 3.12 M8 颈肩协调（详细设计，2026-11-05）
+
+**目标与范围**：按 ADR-009「脸部位移沿颈部向下衰减，到肩线为 0；位移限制在人像蒙版内」，消除 M5 形变后脸与颈之间可能出现的硬边（R-07）。完成标准仍是「脸与颈过渡无明显断裂」。
+
+- **本里程碑只做 A 级**：沿颈纵向衰减 + 人像蒙版内约束。ADR-009 中「小头（B 级）以颈根为中心衰减缩放」按 B 级排期，拆为 **M8.1**（登记 Q-05），不纳入 M8；**不修改 ADR-009 的内容**（§0 约定 ADR 一经接受不修改，只做范围说明）。
+- 理由：A 级只需改位移场的权重表，不动 MLS 控制点、不动渲染 pass；小头需要在 `FaceShapeAdjuster.controls` 无条件追加的整图边框锚点之外另建第三套「以颈根为中心、肩线归零」的 MLS 场，是独立的一块形变（约 2–3 天）。把两者绑在一起会让已可验证的 A 级验收与未验证的 B 级形变互相牵制，R-07 无法干净关闭，也没有余量做效果调参。
+- **不做**：人体姿态检测（B 级预留）、瘦腰 / 瘦腿（C 级）、新渲染 pass / kernel / 纹理、新增用户可调参数、iPhone 真机验证（`AGENTS.md` 约定推迟到核心功能完成后）。
+
+**效果优先原则**：分割蒙版约束是手段不是目标。下列权重公式是起点而非教条；若实测过渡不自然、颈肩出现硬边、发丝或衣领被拖动，允许调整走廊宽度、衰减曲线与 `maskGate` 阈值。数值判据全绿不等于验收通过，最终以 `SampleImages/IMG_0291.jpg`（完整肩线、灰蓝衬衫 + 白 T 恤、暖色复杂背景）与 `IMG_0789.HEIC`（M5 基线：白 T 恤 + 纯灰墙，肩被裁在画面底边，走兜底路径）的前后目视对比为准，由用户拍板。预留 2–3 轮调参；若蒙版方案整体反而更差，回退到 `bodyCoordination = false` 的 M5 基线并重新设计，失败尝试照 §3.5 惯例如实记录。
+
+#### 现状与约束
+
+- `DisplacementField.falloffTable` 是**各向同性径向**衰减：`smoothstep(0.45R, 0.15R, 到该脸最近关键点的距离)`，多脸取 max。它是 M5「背景严格不动」的关键（§3.7 记录过衰减因子 `init` 默认值漏改导致背景 40~50% 像素差异的踩坑）。
+- **不能直接调大 `falloffOuterFactor`**：位移会向左右与上方同时扩散，踩坑复发，并打断 `DisplacementFieldTests` 的横向 / 斜向远场探针。
+- 结论：颈部延伸必须是**有向的、只在下巴以下的窄走廊**，而不是把径向圈扩大。`falloffInnerFactor / falloffOuterFactor` 保持 0.15 / 0.45 不动。
+- 约束：ADR-005（BFAlgorithms 零 Apple 依赖，连 Foundation 也不能 `import`）、ADR-006（脸部与颈肩位移合并后只做一次 warp）、ADR-007（颜色 → 几何 → 美妆）、ADR-012（多脸逐张独立）、ADR-016（analyze / render 拆分）。
+
+#### 衰减权重
+
+坐标统一为 `FaceGeometry` 的像素坐标、**y 向上**。每脸由 76 点推得 `minY`（下巴）、`height`（脸高）、`faceWidth`、`axisX`（瞳孔中轴）、`R`（`allPoints` 质心到最远点距离）；由蒙版推得 `neckRootY` / `shoulderY` / `xNeck`。
+
+```
+neckRootY  = minY − 0.08 × height
+upperCut   = smoothstep(neckRootY + 0.10 × height, neckRootY, y)  // 防头顶竖直位移带
+vTaper     = smoothstep(shoulderY, neckRootY, y) × upperCut        // 肩线 0 → 颈根 1
+lTaper     = smoothstep(0.50 × faceWidth, 0.25 × faceWidth, |x − xNeck|)
+neck_f     = vTaper × lTaper                                        // 下巴以下的窄走廊
+radial_f   = 现有 falloffTable（原样保留）
+
+radial     = max_f(radial_f)                                        // 多脸取并集
+neck       = max_f(neck_f)
+spatial    = max(radial, neck)                                      // 脸部内 radial ≈ 1，位移不被改动
+maskGate   = m < 0.02 ? 0 : smoothstep(0.5, 0.9, m)                 // m 为人像蒙版采样值
+W          = spatial × maskGate                                     // 乘积，不是 min
+```
+
+- 空间取 `max`：两区并集，脸部内保持 M5 行为，交界处 C0 连续；蒙版取乘积：`m = 0` 处严格 0，且比 `min` 少一个硬拐角。
+- 边界羽化三层：`smoothstep` 本身、`maskGate` 软阈值、128 节点粗网格 + `WarpRenderer` 双线性放大（2316×3088 图上约 24px 过渡带）。网格节点上 `W = 0` 可精确断言；相邻像素仍可能有极小双线性残差，因此像素级判据沿用 M5 的「≤ 1 灰阶」。必要时在网格分辨率上对 `maskGate` 做一圈腐蚀。
+- `sampleOffsets` 仅把 `falloff[index]` 换成 `W[index]`；权重表在 `solve` 里算一次，折叠回退循环不重算。**不新增 MLS 场、控制点、pass、kernel 或纹理**，符合 ADR-006 / ADR-007，无性能与显存增量；美妆仍用同一总场变换关键点。
+- `Config` 新增 9 个字段（走廊内外半宽、颈根下沉、肩线兜底比例、宽度突变倍率、`upperCut`、`maskGateLow/High`、`maskEpsilon`）。**注意 `Config` 是手写显式 `init`**，属性默认值与 `init` 默认参数必须同步（§3.7 踩坑），并加一致性单测。
+
+#### 跨层数据契约
+
+BFKit 的 `SegmentationMask`（`import CoreGraphics`，UInt8 行优先）不能进 BFAlgorithms。新增纯 Swift 类型，零 `import`：
+
+```swift
+public struct PersonMaskGrid: Sendable {
+    public let width: Int, height: Int, values: [Float]   // 0...1，行优先
+    public func sample(u: Float, v: Float) -> Float       // 归一化双线性
+}
+public enum BodyCoordination {
+    public static func weightTable(
+        faces: [FaceGeometry], imageSize: (width: Int, height: Int),
+        columns: Int, rows: Int, config: DisplacementField.Config,
+        mask: PersonMaskGrid?
+    ) -> [Float]
+}
+```
+
+- `DisplacementField.solve` 末尾追加 `personMask: PersonMaskGrid? = nil`；**nil 时逐元素返回原 `falloffTable` 结果**，保证 37 + 44 项既有测试与合成图断言逐位不变，同时也是「分割失败 / `--no-mask`」的降级路径（R-04 不强行处理）。所有既有调用方都是带标签参数，末尾追加默认参数完全兼容。
+- 三套分辨率（Vision 蒙版自身 W×H、皮肤蒙版 512/256、位移网格 128、图像像素 ≤4096）用**归一化 `(u, v)` 采样**对齐，不降采样到 128，避免三处取整错位。
+- **v 方向需实测锁定**：`SkinMaskGenerator.samplePersonMask` 现有实现把光栅行比例 `v` 直接喂给蒙版像素（无翻转），而 `FaceGeometryConverter` 明确 Vision 关键点与 `FaceGeometry` 同为 y 向上。两套行序的关系用一个上 / 下不对称的合成蒙版单测 + `_body.png` 真实图目视复核；若相反，只在 `PersonMaskConverter` 一处 `1 − v` 修正并写测试锁死。这是本设计中最需要实测确认的细节。
+- `BeautyEngine.render` 构造并传入蒙版；新增 `bodyCoordination: Bool = true` 开关（`process` / `render` 各入口带默认值向下转发），作为一键回退。
+
+#### 肩线定位（不引入人体姿态）
+
+主方案：从 `neckRootY` 向下逐行扫 `PersonMaskGrid`，在包含 `xNeck` 的连通段上取人像宽度 `w(y)`；颈段窄、肩线处突然展宽，取连续 ≥3 行满足 `w(y) > 1.8 × wNeckMedian` 的第一行为肩线，再用一阶差分最大处微调。`xNeck` 取蒙版颈段的水平质心（对侧身 / 偏转鲁棒），退化时回退瞳孔中轴。
+兜底链：硬界 `[neckRootY − 2.2 × height, neckRootY − 0.5 × height]` → 越界或找不到突变时用固定比例 `neckRootY − 0.90 × height` → 蒙版下沿与图像 `y = 0` 保护 → 检测 / 蒙版缺失走 nil 兼容路径。`IMG_0291` 验主方案（肩线完整、宽度突变明显），`IMG_0789` 验兜底（肩被裁掉）。
+升级到 `VNDetectHumanBodyPoseRequest` 的触发条件：真实合影 / 侧身素材上肩线估计反复失败、M8.1 需要可靠颈根锚、或用户要求显式肩点。ADR-002 允许使用 Vision 姿态，但 A 级不需要；README 架构图中的「人体姿态」标注为 B 级预留。
+
+#### 管线接入
+
+`BeautyEngine.render` 在 `DisplacementField.solve` 之前把 `analysis.detection.personMask` 转成 `PersonMaskGrid` 并传入。`WarpRenderer` 及其 Metal kernel、`FaceGeometryConverter`、`MLSSolver`、三个 Adjuster、`MakeupMaskGenerator`、App 参数模型、`Configs/beauty_default.json` 均不改动。M8 不新增用户可调参数。
+AutoBeauty 新增 `--no-body`（A/B 开关）、`--dump-neck`（颈中线剖面 + 颈根 / 肩线 / 走廊半宽 + 蒙版外与肩线下最大位移，须为 0）、`--shoulder-line`（调参覆盖）、`_body.png`（权重热图）。
+
+#### 验收判据
+
+数值：肩线以下网格节点位移恰 0（像素 |d| < 0.5px）；人像蒙版外节点恰 0，背景与白 T 恤像素差 ≤ 1 灰阶；颈部中线位移单调衰减且相邻差分 ≤ 0.15 × max；脸部位移与 `--no-body` 基线逐像素一致；走廊两侧 `xNeck ± 2 × faceWidth` 处 `W = 0`（防径向扩圈复发）；`minimumJacobian() > 0` 且 `appliedStrength == 1`；多脸各颈段独立、脸间为 0；`--dump-edge` 反向点 0。
+目视：`IMG_0291` 下巴→颈→肩过渡连续无横向硬边，肩线以下躯干 / 手臂 / 桌面不动，灰蓝衬衫与白 T 恤纹理不被拖拽；`_body.png` 权重带呈「上宽下窄、肩线处收 0」而非左右扩散；`IMG_0789` 白 T 恤领口缝线与灰墙不变。**两张都过且用户目视确认「效果好」才关闭 R-07。**
+回归：BFAlgorithms 37 项、BFKit 44 项全绿，尤其 `DisplacementFieldTests` 远场≈0 / 雅可比>0 / 多脸独立、`WarpRendererTests` 背景不动、`MakeupTests` 形变对齐；`scripts/check_no_apple_imports.sh` 通过。
+
+#### 回归与风险
+
+最高风险是**衰减带放宽导致背景位移复发**（§3.7 原坑）。缓解：有向走廊、0.15/0.45 不动、`maskGate` 乘积硬置 0、`upperCut`、Config 一致性单测、侧向守卫测试；一键回退 `bodyCoordination = false` / `personMask = nil` 立即回到 M5 位精确行为。其余：maskGate 梯度可能触发雅可比回退（放宽阈值带）、肩线估错（硬界 + 固定比例兜底 + `--shoulder-line`）、蒙版 v 方向反了（不对称合成蒙版测试）、`IMG_0291` 背景虚化人影可能干扰检测 / 分割（先记录，干扰则记为已知限制交 M10 合影验证，不扩大 M8 范围）。
+
+#### 任务分解
+
+0. 补本节设计与 README §3.10、修文档漂移 → 1. BFAlgorithms 三个 Body 类型 + `DisplacementField` 改造 + 单测 → 2. BFKit `PersonMaskConverter` + `BeautyEngine` + 调试绘制 + 单测 → 3. AutoBeauty 旗标与 `_body.png` → 4. 双素材效果迭代与调参（2–3 轮）→ 5. App 补齐美妆分类、颜色、预设与分割对比（用户追加）→ 6. App 构建验证 → 7. 文档收口与提交。
+
+#### M8.1 小头联动解法备忘（本里程碑不实现）
+
+新建**场 C**：头部 76 点绕 `neckRoot` 缩放（`output = neckRoot + s·(p − neckRoot)`，`s = 1 − 0.1 × param`），不追加整图边框锚点，改为沿肩线与颈走廊两侧撒零位移锚，使缩放在肩线自然归零；场 C 的权重不用径向 `falloff`（会连头内缩放一起砍掉），改用 `neckTaper × maskGate`。三场叠加后统一做雅可比检查与 0.7 回退，美妆关键点仍用同一总场。这正是 ADR-009「以颈根为中心衰减缩放」的落地方式，因此 `neckRoot` 在 M8 就要定义好并暴露。根因见 §3.7 已知限制：`FaceShapeAdjuster.controls` 无条件追加整图边框锚点，MLS 远场退化为全局刚体，整体缩放 / 平移类参数会被这些锚点抵抗。
+
+#### 实现记录（2026-11-06，M8 完成）
+
+**发现并修复一个既有垂直镜像 bug（本轮最大意外）。** 在真实半身像 `IMG_0291` 上做端到端放大差异图时，发现脸型形变落在**胸口 / 衬衫领子**而非脸上：差异质心 0.680（胸），脸实际在 0.13–0.40。根因是 `DisplacementField` 的网格 row 0 对应 y 向上 y=0（图像下沿），而 `WarpRenderer.makeDisplacementTexture` 直接把场按行原样灌进 Metal 纹理，Metal 纹理 row 0 / 归一化 v=0 却是图像上沿。源图纹理走的 `CGContext.draw` 内部自带一次翻转，位移纹理没有，两者相差一次镜像。旧单测用上下近似对称的居中合成脸，因此一直没暴露。
+
+修复只在 `makeDisplacementTexture` 一处：上传时按行倒序、并把 `dy` 由 y 向上取反为光栅向下；**不动 kernel、不新增 pass / 纹理**。修复后差异质心 0.680 → 0.305，目视确认形变精准落在眼镜、脸颊、下颌。`WarpRendererTests` 里原本按镜像结果校准的采样窗口（raster 180–300）同步修正为 245–430，并新增 `testDisplacementFieldMapsYUpToRasterRows` 锁死方向。此修复同时保证 M8 颈部走廊不会跑到头顶上方。
+
+**蒙版方向（§3.12 最高风险细节）已实测锁定。** `SegmentationMask` row 0 = 图像上沿、`PersonMaskGrid.sample(u:v:)` 的 v 为 y 向上并在内部换算；`PersonMaskConverter` 因此不做翻转。用真实 Vision 检测结果确认：人像上半均值 0.39、下半 0.96（符合半身像），头顶位置与 Vision bbox 吻合。BFKit 新增 `testPersonMaskGridYUpSampling` / `testPersonMaskOrientation`（上/下不对称合成蒙版）锁死方向。
+
+**效果优先的三轮调参（含失败尝试，按 §1.1 如实记录）：**
+
+1. 首轮 `W = spatial × maskGate` 在 `IMG_0789`（头部特写）触发两次折叠回退：强度 1.00 → 0.49，最大位移 38.8 → 19.0 px，整脸形变被砍半。
+2. **失败尝试 A**：把 `maskGate` 软阈值从 (0.5, 0.9) 放宽到 (0.08, 0.85) 无效。加蒙版值分布诊断后发现 Vision 分割是**硬二值**（32.5% 为 0、66.8% 为 1，中间值仅约 1%），`smoothstep` 根本没机会生效。
+3. **失败尝试 B**：对蒙版做 3×3 邻域羽化采样，把硬阶跃摊成软过渡，仍无效（强度仍 0.49）。
+4. **最终改公式**：定位到真正原因是 `IMG_0789` 的脸几乎占满画面、分割蒙版在脸缘内缩，乘积式门控把**脸部原有的 radial 权重也一起砍掉**了，违反「脸部位移与 M5 基线逐像素一致」。改为 **`W = max(radial, neck × gate)`**——门控只约束新增的颈部走廊，不碰原有径向衰减。改动后强度恢复 1.00 / 位移 38.8px，且蒙版外新增权重严格 0、肩线以下位移严格 0。羽化采样保留（降低走廊边界阶跃）。数值探针同步改为检查「M8 相对 M5 的**权重增量**」而非绝对位移，否则会把 M5 本来就有的脸缘形变误判为越界。
+
+**最终数值验收（双素材，全参数拉满）**：`IMG_0291` 走蒙版宽度突变主方案（肩线 396.2）、`IMG_0789` 走固定比例兜底（肩线 0.0），两条路径都覆盖；M8 最大新增权重 0.939 / 0.867（颈部确有形变）；蒙版外新增 0.000000；肩线以下最大位移 0.0000 px；最小雅可比 0.562 / 0.368 > 0，强度均 1.00；脸部与 M5 基线逐像素一致；肩线以下（top 60%+ / 95%+）A/B 差异为 0。目视：分割线两侧脸型一致，差异只落在下巴→颈→领口一条连续弧线，灰墙与白 T 恤绝大部分全黑、无硬边。
+
+**调试能力**：AutoBeauty 新增 `--no-body`（M5 基线 A/B）、`--dump-neck`（33 点中线剖面 + 权重/位移探针 + 蒙版值分布）、`--shoulder-line <倍数>`（经 `Config.shoulderLineFactorOverride` 真正作用到求解器）、`--dump-body` → `_body.png` 权重热图；`_debug.png` 叠加下巴 / 颈根 / 肩线 / 走廊边界。固定脚本 `scripts/render_m8.sh` 一次产出开 / 关两组图。
+
+**App UI 补齐（用户追加）**：`BeautyCategory` 第 6 类 `.makeup`，4 条强度滑杆 + 4 组色号（独立 `MakeupColorDefinition` 类型，不碰既有 `WritableKeyPath<…, Float>` 机制）；预设补美妆、单项 / 整组重置对颜色生效；预览区新增可拖拽分割线 before/after（保留原图 Toggle）。颜色变更走同一套 50ms 防抖 + generation token，不重跑 `analyze`。
+
+**构建验证**：本机 Xcode 26.2 / arm64 上 `xcodebuild` 解析本地包稳定触发嵌套沙箱 `sandbox_apply: Operation not permitted`（SwiftPM manifest 层，与客户端执行权限无关），真实 App 构建未能完成，如实记录。改用 SwiftPM harness 把 App 全部 6 个源文件作为 target 全量编译通过（含 SwiftUI / `@Observable` / PhotosUI）。`scripts/verify.sh` 固定入口统一跑 ADR-005 守护 + BFAlgorithms 50 项 + BFKit 51 项 + AutoBeauty 构建 + App 源码类型检查，结果全 0。
+
+**范围说明**：本轮按批准的「效果优先」原则调整了权重公式（§3.12 原式 `W = spatial × maskGate` → `max(radial, neck × gate)`），并额外修复了 `WarpRenderer` 的既有镜像 bug；`WarpRenderer` 的 Metal kernel、三个 Adjuster、`BeautyParameters`、`Configs/beauty_default.json` 结构均未改动。iPhone 真机、M9 完整交互回归、M8.1、M10 仍按约定后置。
 
 ---
 
@@ -404,7 +522,7 @@
 | R-04 | Vision 在侧脸、遮挡下失败 | 高 | 中 | 检测失败时提示，不强行处理 | 开放 |
 | R-05 | 颜色空间与 Display P3 偏色 | 中 | 中 | 统一工作色彩空间，保留 ICC | 开放 |
 | R-06 | 形变与美妆错位 | 中 | 中 | 美妆蒙版用 warp 之后的形变关键点生成（ADR-007 / 3.9），实测随形变对齐 | 已缓解 |
-| R-07 | 颈肩过渡显得突兀 | 中 | 低 | 衰减函数，小幅使用（ADR-009） | 开放 |
+| R-07 | 颈肩过渡显得突兀 | 中 | 低 | 沿颈纵向衰减到肩线为 0 + 人像蒙版内约束（3.12）；效果以双素材目视为准 | **已缓解（M8 完成，待用户目视最终拍板）** |
 | R-08 | 程序化美妆写实度不足 | 高 | 低 | 口红色度替换保亮度（唇纹 / 明暗保留），腮红 / 眼影低权重合成（3.9）；颜色可自定义持续调优 | 已缓解 |
 | R-09 | iOS 18 兼容性无真机验证 | 中 | 中 | 记录在验收中；必要时补一台 iOS 18 设备 | 开放 |
 | R-10 | 免费 Apple ID 签名 7 天失效 | 高 | 低 | 必要时付费开发者账号 | 开放 |
@@ -425,6 +543,7 @@
 | Q-02 | SampleImages 是否入库？ | 已决定：不入库，由 .gitignore 排除 |
 | Q-03 | 是否需要 Apple Developer Program 付费账号用于分发？ | 待定 |
 | Q-04 | 导出时是否提供「原图尺寸」选项（需分块处理）？ | 推迟到 v1 之后 |
+| Q-05 | M8.1 小头联动（B 级）何时排期？ | 已从 M8 拆出；解法见 3.12「M8.1 小头联动解法备忘」，待 M8 验收后决定 |
 
 ---
 
@@ -469,3 +588,8 @@ PhotosPicker 系统相册路径只在非 Debug 模式下验证。
 | 2026-11-05 | 新增 ADR-016 / ADR-017；M9 阶段性完成：BeautyEngine 拆分 analyze / render，BeautyFaceDemo 接入真实管线并实现工具栏、左侧功能栏、底部滑杆面板、预设 / 对比 / 导出；启动自动载入本地默认示例照片（真实人像不入库）；pbxproj 链接 BFKit / BFAlgorithms；arm64 交叉编译与 UI 类型检查通过，真机验证待补 |
 | 2026-11-05 | M7 完成：口红 / 腮红 / 眉毛 / 眼影程序化美妆——形变后关键点生成四路蒙版，Metal 色度替换合成（口内排除），`FaceGeometry.innerLips`，AutoBeauty 新增 4 个美妆参数；BFKitTests 44 项、BFAlgorithms 37 项通过 |
 | 2026-11-05 | AutoBeauty 参数配置文件：默认值集中 `Configs/beauty_default.json`，`--config / --no-config / --dump-config`；调整单字段重新渲染即可逐项验证效果（3.10） |
+| 2026-11-05 | 补 M8 颈肩协调详细设计（3.12）与 README 3.10：按 ADR-009 切分范围（小头拆 M8.1，登记 Q-05）、有向颈部走廊 + 人像蒙版约束的衰减权重、跨层数据契约与肩线定位；确立「效果优先」原则；修正 README 头部状态行、`DisplacementField` 衰减注释与架构图人体姿态的文档漂移 |
+| 2026-11-06 | **M8 完成（Mac）**：BFAlgorithms 三个 Body 类型 + `DisplacementField` 可选 `personMask`、BFKit `PersonMaskConverter` / `BeautyEngine` 四入口开关与调参透传、AutoBeauty M8 调试旗标与 `_body.png`；双素材三轮调参后公式为 `W = max(radial, neck × gate)`（含两次失败尝试记录），数值与目视验收通过，R-07 已缓解 |
+| 2026-11-06 | 修复既有 `WarpRenderer` 位移场垂直镜像 bug（真实半身像上形变落到胸口）：上传时行倒序 + `dy` 取反，差异质心 0.680 → 0.305；新增方向回归测试并修正被旧镜像结果带偏的采样窗口 |
+| 2026-11-06 | App UI 补齐美妆分类（4 强度 + 4 色号、预设与重置）与可拖拽分割对比；App 源码经 SwiftPM harness 全量编译通过（Xcode 本机受嵌套沙箱限制无法解析本地包，如实记录）；`scripts/verify.sh` 固定验证入口：BFAlgorithms 50 项 / BFKit 51 项 / AutoBeauty / App 类型检查全绿 |
+| 2026-11-06 | 工程约定：`AGENTS.md` 增加本地构建/验证命令常驻授权与良性沙箱提示说明；新增 `scripts/render_m8.sh` 固定 A/B 渲染入口；用户偏好改为中文汇报 |

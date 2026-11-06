@@ -190,14 +190,29 @@ public final class WarpRenderer {
             return nil
         }
 
+        // 坐标约定换算（M8 修复，见 dev_ledger 3.12）：
+        // - `DisplacementField` 的 row 0 对应 y 向上坐标 y = 0，即**图像下沿**；
+        //   它与人脸 `FaceGeometry` 同为 y 向上，算法层（含颈部走廊、蒙版门）
+        //   都在这个坐标系里求解。
+        // - Metal 纹理 row 0 / 归一化 v = 0 对应**图像上沿**；kernel 的 gid
+        //   也是光栅行序。源图纹理虽然也走光栅序，但 `CGContext.draw` 内部
+        //   已把 CGImage 的 top-down 数据翻正，位移纹理没有这一步。
+        // 因此上传时必须把场按行倒序，并把 dy 由 y 向上取反为光栅向下。
+        // 少了这一步，形变会垂直镜像到对称位置（真实半身像上表现为
+        // 脸型形变落到胸口、M8 颈部走廊跑到头顶），而居中合成脸因为
+        // 上下近似对称，旧单测未能发现。
         var halfs = [Float16](
             repeating: 0,
             count: field.columns * field.rows * 4
         )
-        for index in field.offsetX.indices {
-            let base = index * 4
-            halfs[base] = Float16(field.offsetX[index])
-            halfs[base + 1] = Float16(field.offsetY[index])
+        for row in 0..<field.rows {
+            let sourceRow = field.rows - 1 - row
+            for column in 0..<field.columns {
+                let source = sourceRow * field.columns + column
+                let base = (row * field.columns + column) * 4
+                halfs[base] = Float16(field.offsetX[source])
+                halfs[base + 1] = Float16(-field.offsetY[source])
+            }
         }
 
         halfs.withUnsafeBytes { buffer in

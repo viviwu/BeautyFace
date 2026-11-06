@@ -31,6 +31,7 @@ enum BeautyCategory: String, CaseIterable, Identifiable {
     case retouch
     case faceShape
     case features
+    case makeup
     case presets
 
     var id: String { rawValue }
@@ -41,6 +42,7 @@ enum BeautyCategory: String, CaseIterable, Identifiable {
         case .retouch: return "局部修饰"
         case .faceShape: return "脸型"
         case .features: return "五官"
+        case .makeup: return "美妆"
         case .presets: return "预设"
         }
     }
@@ -51,6 +53,7 @@ enum BeautyCategory: String, CaseIterable, Identifiable {
         case .retouch: return "局部"
         case .faceShape: return "脸型"
         case .features: return "五官"
+        case .makeup: return "美妆"
         case .presets: return "预设"
         }
     }
@@ -61,6 +64,7 @@ enum BeautyCategory: String, CaseIterable, Identifiable {
         case .retouch: return "eye"
         case .faceShape: return "person.crop.circle"
         case .features: return "face.smiling"
+        case .makeup: return "paintpalette"
         case .presets: return "slider.horizontal.3"
         }
     }
@@ -71,7 +75,64 @@ enum BeautyCategory: String, CaseIterable, Identifiable {
         case .retouch: return "眼、齿、眼下与痘印"
         case .faceShape: return "轮廓与脸型形变"
         case .features: return "眼、眉、鼻、嘴微调"
+        case .makeup: return "口红、腮红、眉毛与眼影"
         case .presets: return "一键套用与重置"
+        }
+    }
+
+    /// 美妆颜色定义。`MakeupColor` 不是 Float，无法复用
+    /// `ParameterDefinition` 的 KeyPath 机制，因此用独立类型承载，
+    /// 避免改动既有 20 条滑杆。
+    var colorDefinitions: [MakeupColorDefinition] {
+        switch self {
+        case .makeup:
+            return [
+                .init("lipColor", "口红色号",
+                      \BeautyParameters.makeup.lipstickColor,
+                      defaultValue: .rose,
+                      swatches: [
+                        .init("rose", "玫瑰", .rose),
+                        .init("coral", "珊瑚", .coral),
+                        .init("pink", "蜜桃粉", MakeupColor(red: 0.92, green: 0.48, blue: 0.52)),
+                        .init("brick", "砖红", MakeupColor(red: 0.68, green: 0.20, blue: 0.18)),
+                        .init("berry", "浆果", MakeupColor(red: 0.55, green: 0.14, blue: 0.30)),
+                        .init("nude", "裸棕", MakeupColor(red: 0.72, green: 0.46, blue: 0.40))
+                      ]),
+                .init("blushColor", "腮红色号",
+                      \BeautyParameters.makeup.blushColor,
+                      defaultValue: .pinkBlush,
+                      swatches: [
+                        .init("pink", "粉桃", .pinkBlush),
+                        .init("apricot", "杏橘", .apricotBlush),
+                        .init("coral", "珊瑚", .coral),
+                        .init("rose", "玫瑰", .rose),
+                        .init("peach", "蜜桃", MakeupColor(red: 0.96, green: 0.70, blue: 0.58)),
+                        .init("plum", "梅子", MakeupColor(red: 0.74, green: 0.36, blue: 0.46))
+                      ]),
+                .init("browColor", "眉色",
+                      \BeautyParameters.makeup.browColor,
+                      defaultValue: .darkBrown,
+                      swatches: [
+                        .init("dark", "深棕", .darkBrown),
+                        .init("warm", "暖棕", .warmBrown),
+                        .init("earth", "大地", .earthShadow),
+                        .init("black", "黑", MakeupColor(red: 0.08, green: 0.07, blue: 0.07)),
+                        .init("ash", "灰棕", MakeupColor(red: 0.36, green: 0.32, blue: 0.30))
+                      ]),
+                .init("shadowColor", "眼影色号",
+                      \BeautyParameters.makeup.eyeshadowColor,
+                      defaultValue: .earthShadow,
+                      swatches: [
+                        .init("earth", "大地", .earthShadow),
+                        .init("warm", "暖棕", .warmBrown),
+                        .init("rose", "玫瑰", MakeupColor(red: 0.72, green: 0.44, blue: 0.46)),
+                        .init("plum", "梅子", MakeupColor(red: 0.52, green: 0.32, blue: 0.48)),
+                        .init("gold", "香槟金", MakeupColor(red: 0.82, green: 0.68, blue: 0.46)),
+                        .init("smoke", "烟灰", MakeupColor(red: 0.38, green: 0.36, blue: 0.40))
+                      ])
+            ]
+        default:
+            return []
         }
     }
 
@@ -129,9 +190,57 @@ enum BeautyCategory: String, CaseIterable, Identifiable {
                 .init("mouthShape", "微笑嘴型", \BeautyParameters.faceFeature.mouthShape,
                       defaultValue: 0.20, hint: "嘴角上扬并收窄")
             ]
+        case .makeup:
+            return [
+                .init("lipstick", "口红", \BeautyParameters.makeup.lipstick,
+                      defaultValue: 0.28, hint: "唇部着色，强度即着色权重上限"),
+                .init("blush", "腮红", \BeautyParameters.makeup.blush,
+                      defaultValue: 0.22, hint: "面颊晕染，边缘自动羽化"),
+                .init("brow", "眉毛加深", \BeautyParameters.makeup.brow,
+                      defaultValue: 0.18, hint: "沿眉形加深，不改变眉形"),
+                .init("eyeshadow", "眼影", \BeautyParameters.makeup.eyeshadow,
+                      defaultValue: 0.20, hint: "上眼睑晕染，避开眼球")
+            ]
         case .presets:
             return []
         }
+    }
+}
+
+/// 一个美妆色号（可点选的预设色）。
+struct MakeupSwatch: Identifiable {
+    let id: String
+    let name: String
+    let color: MakeupColor
+
+    init(_ id: String, _ name: String, _ color: MakeupColor) {
+        self.id = id
+        self.name = name
+        self.color = color
+    }
+}
+
+/// 一条可调颜色的数据描述。独立于 `ParameterDefinition`，用
+/// `WritableKeyPath<BeautyParameters, MakeupColor>` 绑定颜色本身。
+struct MakeupColorDefinition: Identifiable {
+    let id: String
+    let title: String
+    let keyPath: WritableKeyPath<BeautyParameters, MakeupColor>
+    let defaultValue: MakeupColor
+    let swatches: [MakeupSwatch]
+
+    init(
+        _ id: String,
+        _ title: String,
+        _ keyPath: WritableKeyPath<BeautyParameters, MakeupColor>,
+        defaultValue: MakeupColor,
+        swatches: [MakeupSwatch]
+    ) {
+        self.id = id
+        self.title = title
+        self.keyPath = keyPath
+        self.defaultValue = defaultValue
+        self.swatches = swatches
     }
 }
 
@@ -144,9 +253,31 @@ enum BeautyDefaults {
             for definition in category.parameters {
                 value[keyPath: definition.keyPath] = definition.defaultValue
             }
+            // 颜色与强度同属「自然」默认值，单点维护避免两套色号漂移。
+            for color in category.colorDefinitions {
+                value[keyPath: color.keyPath] = color.defaultValue
+            }
         }
         return value
     }()
+}
+
+/// 颜色控件把 `MakeupColor`（线性 0...1）映射到 SwiftUI 的 Color 与展示用十六进制。
+extension MakeupColor {
+    var swiftUIColor: Color {
+        Color(.sRGB,
+              red: Double(red),
+              green: Double(green),
+              blue: Double(blue),
+              opacity: 1)
+    }
+
+    var hexString: String {
+        func byte(_ value: Float) -> Int {
+            Int((min(max(value, 0), 1) * 255).rounded())
+        }
+        return String(format: "#%02X%02X%02X", byte(red), byte(green), byte(blue))
+    }
 }
 
 enum BeautyPreset: String, CaseIterable, Identifiable {
@@ -168,9 +299,9 @@ enum BeautyPreset: String, CaseIterable, Identifiable {
 
     var detail: String {
         switch self {
-        case .original: return "关闭全部美化，查看原始照片"
-        case .natural: return "轻度磨皮与肤色修饰，附带轻微脸型与五官微调"
-        case .refined: return "更明显的磨皮、提亮与形变，适合查看效果差异"
+        case .original: return "关闭全部美化（含美妆），查看原始照片"
+        case .natural: return "轻度磨皮与肤色修饰，附轻微脸型、五官与淡妆"
+        case .refined: return "更明显的磨皮、形变与略浓的彩妆，适合查看效果差异"
         case .custom: return "当前参数由手动调整而来"
         }
     }
@@ -207,6 +338,16 @@ enum BeautyPreset: String, CaseIterable, Identifiable {
                 browThickness: 0.30,
                 noseWidth: 0.30,
                 mouthShape: 0.40
+            )
+            value.makeup = MakeupParameters(
+                lipstickColor: .coral,
+                lipstick: 0.55,
+                blushColor: .apricotBlush,
+                blush: 0.48,
+                browColor: .warmBrown,
+                brow: 0.38,
+                eyeshadowColor: MakeupColor(red: 0.72, green: 0.44, blue: 0.46),
+                eyeshadow: 0.45
             )
             return value
         case .custom:

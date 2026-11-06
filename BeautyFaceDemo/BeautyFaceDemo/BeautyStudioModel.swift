@@ -84,6 +84,9 @@ final class BeautyStudioModel {
     var selectedCategory: BeautyCategory = .skin
     var activePreset: BeautyPreset = .natural
     var showingOriginal = false
+    /// M8 / 美妆目视：可拖拽分割线对比，左侧原图、右侧效果。
+    var splitComparison = false
+    var splitFraction: Double = 0.5
     var sourceName = "内置示例人像"
 
     private(set) var originalImage: CGImage?
@@ -233,6 +236,21 @@ final class BeautyStudioModel {
         )
     }
 
+    /// 颜色控件走与滑杆完全相同的自定义标记 + 防抖渲染路径，
+    /// 不会重新跑 `analyze`。
+    func setColor(_ color: MakeupColor, for definition: MakeupColorDefinition) {
+        var updated = parameters
+        updated[keyPath: definition.keyPath] = color
+        parameters = updated
+        activePreset = .custom
+        exportURL = nil
+        schedulePreview()
+    }
+
+    func reset(_ definition: MakeupColorDefinition) {
+        setColor(definition.defaultValue, for: definition)
+    }
+
     func apply(_ preset: BeautyPreset) {
         guard preset != .custom else { return }
         parameters = preset.parameters
@@ -245,6 +263,9 @@ final class BeautyStudioModel {
         var updated = parameters
         for definition in category.parameters {
             updated[keyPath: definition.keyPath] = definition.defaultValue
+        }
+        for color in category.colorDefinitions {
+            updated[keyPath: color.keyPath] = color.defaultValue
         }
         parameters = updated
         activePreset = .custom

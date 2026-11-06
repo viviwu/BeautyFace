@@ -17,9 +17,9 @@ public struct DisplacementField {
     public let columns: Int
     /// 网格纵向节点数。
     public let rows: Int
-    /// 位移 x 分量（行优先，从上到下）。
+    /// 位移 x 分量（行优先；row 0 对应 y = 0，y 向上递增）。
     public let offsetX: [Float]
-    /// 位移 y 分量。
+    /// 位移 y 分量（同上）。
     public let offsetY: [Float]
     /// 工作图像尺寸（像素）。
     public let imageSize: (width: Int, height: Int)
@@ -51,7 +51,8 @@ public struct DisplacementField {
         imageSize: (width: Int, height: Int),
         parameters: FaceShapeParameters,
         features: FaceFeatureParameters = .none,
-        config: Config = Config()
+        config: Config = Config(),
+        personMask: PersonMaskGrid? = nil
     ) -> DisplacementField? {
         guard !parameters.isIdentity || !features.isIdentity else { return nil }
         guard imageSize.width > 0, imageSize.height > 0 else { return nil }
@@ -129,13 +130,31 @@ public struct DisplacementField {
 
         // 距离衰减：锚点只能压制远场，不能保证归零；要让「背景严格不动」
         // 成立，必须在离脸足够远处把位移显式乘到 0。
-        let falloff = Self.falloffTable(
+        //
+        // M8：personMask == nil 时逐元素保留原 M5 / M6 行为；有蒙版时只在
+        // 人像内部把径向衰减与有向颈部走廊合并。权重表只在这里算一次，
+        // 折叠回退循环不重算（ADR-006）。
+        let radial = Self.falloffTable(
             faces: faces,
             imageSize: imageSize,
             columns: columns,
             rows: rows,
             config: config
         )
+        let falloff: [Float]
+        if let personMask {
+            falloff = BodyCoordination.weightTable(
+                radial: radial,
+                faces: faces,
+                imageSize: imageSize,
+                columns: columns,
+                rows: rows,
+                config: config,
+                mask: personMask
+            )
+        } else {
+            falloff = radial
+        }
 
         var strength: Float = 1
         var field: DisplacementField?
@@ -243,9 +262,12 @@ public struct DisplacementField {
     /// 每个网格节点的距离衰减权重。
     ///
     /// 对每张脸取「到该脸最近关键点的距离」，按脸自身的半径归一：
-    /// `r0 = 1.0 × R` 以内不衰减，`r1 = 1.6 × R` 以外为 0。多张脸取最大值，
+    /// `Config.falloffInnerFactor × R` 以内不衰减，
+    /// `Config.falloffOuterFactor × R` 以外为 0（取值以 `Config` 的属性
+    /// 默认值为准，勿在此处重复硬编码）。多张脸取最大值，
     /// 保证各自的影响范围互不截断。
-    private static func falloffTable(
+    /// BodyCoordination 需要复用这张表做 `max(radial, neck)`，因此保持 internal。
+    static func falloffTable(
         faces: [FaceGeometry],
         imageSize: (width: Int, height: Int),
         columns: Int,
@@ -325,6 +347,38 @@ public struct DisplacementField {
         /// 最多回退次数。
         public var maxRefinements: Int = 12
 
+        // MARK: M8 颈肩协调
+        /// 颈部走廊内半宽（相对脸宽），该范围内横向不衰减。
+        public var neckCorridorInnerFactor: Float = 0.25
+        /// 颈部走廊外半宽（相对脸宽），该范围外横向权重为 0。
+        public var neckCorridorOuterFactor: Float = 0.50
+        /// 颈根相对下巴的下沉量（相对脸高）。
+        public var neckRootDropFactor: Float = 0.08
+        /// 肩线兜底位置：颈根下方多少倍脸高。
+        public var shoulderDropFactor: Float = 0.90
+        /// 肩线宽度突变倍率（相对颈段中位宽度）。
+        public var shoulderWidthJump: Float = 1.8
+        /// 颈根上方竖直切断带（相对脸高），防头顶位移带。
+        public var neckUpperCutFactor: Float = 0.10
+        /// 人像蒙版软阈值下界。第一轮调参由 0.5 放宽到 0.08：
+        /// 原值会让 m∈(0.02,0.5) 全部硬置 0，在人像边界形成陡峭权重阶跃，
+        /// 触发雅可比 ≤0 的折叠回退（IMG_0789 强度掉到 0.49）。
+        /// 放宽后仍由 maskEpsilon 保证纯背景严格 0。
+        public var maskGateLow: Float = 0.08
+        /// 人像蒙版软阈值上界。
+        public var maskGateHigh: Float = 0.85
+        /// 低于该蒙版值严格置 0。
+        public var maskEpsilon: Float = 0.01
+
+        /// 调试钩子：非 nil 时跳过蒙版肩线推断，强制
+        /// `shoulderY = neckRootY − factor × faceHeight`。
+        /// 仅供 AutoBeauty `--shoulder-line` 调参使用；默认 nil，
+        /// 产品路径（App / 默认 CLI）行为完全不变。
+        public var shoulderLineFactorOverride: Float? = nil
+
+        /// 注意：M5 曾因「属性默认值改了、显式 init 默认值漏改」导致背景
+        /// 大面积形变（台账 3.7）。新增字段必须同步改这里的默认参数，
+        /// `BodyCoordinationTests.testConfigDefaultsMatchExplicitInit` 会守护。
         public init(
             gridLongEdge: Int = 128,
             maxDisplacementFraction: Float = 0.10,
@@ -332,7 +386,17 @@ public struct DisplacementField {
             falloffInnerFactor: Float = 0.15,
             falloffOuterFactor: Float = 0.45,
             refinementDecay: Float = 0.7,
-            maxRefinements: Int = 12
+            maxRefinements: Int = 12,
+            neckCorridorInnerFactor: Float = 0.25,
+            neckCorridorOuterFactor: Float = 0.50,
+            neckRootDropFactor: Float = 0.08,
+            shoulderDropFactor: Float = 0.90,
+            shoulderWidthJump: Float = 1.8,
+            neckUpperCutFactor: Float = 0.10,
+            maskGateLow: Float = 0.08,
+            maskGateHigh: Float = 0.85,
+            maskEpsilon: Float = 0.01,
+            shoulderLineFactorOverride: Float? = nil
         ) {
             self.gridLongEdge = gridLongEdge
             self.maxDisplacementFraction = maxDisplacementFraction
@@ -341,6 +405,16 @@ public struct DisplacementField {
             self.falloffOuterFactor = falloffOuterFactor
             self.refinementDecay = refinementDecay
             self.maxRefinements = maxRefinements
+            self.neckCorridorInnerFactor = neckCorridorInnerFactor
+            self.neckCorridorOuterFactor = neckCorridorOuterFactor
+            self.neckRootDropFactor = neckRootDropFactor
+            self.shoulderDropFactor = shoulderDropFactor
+            self.shoulderWidthJump = shoulderWidthJump
+            self.neckUpperCutFactor = neckUpperCutFactor
+            self.maskGateLow = maskGateLow
+            self.maskGateHigh = maskGateHigh
+            self.maskEpsilon = maskEpsilon
+            self.shoulderLineFactorOverride = shoulderLineFactorOverride
         }
     }
 

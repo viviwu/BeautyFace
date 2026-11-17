@@ -125,7 +125,7 @@ final class BodyCoordinationTests: XCTestCase {
     func testConfigDefaultsMatchExplicitInit() {
         let implicit = DisplacementField.Config()
         let explicit = DisplacementField.Config(
-            gridLongEdge: 128,
+            gridLongEdge: 160,
             maxDisplacementFraction: 0.10,
             displacementScale: 1,
             falloffInnerFactor: 0.15,

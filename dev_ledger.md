@@ -593,3 +593,5 @@ PhotosPicker 系统相册路径只在非 Debug 模式下验证。
 | 2026-11-06 | 修复既有 `WarpRenderer` 位移场垂直镜像 bug（真实半身像上形变落到胸口）：上传时行倒序 + `dy` 取反，差异质心 0.680 → 0.305；新增方向回归测试并修正被旧镜像结果带偏的采样窗口 |
 | 2026-11-06 | App UI 补齐美妆分类（4 强度 + 4 色号、预设与重置）与可拖拽分割对比；App 源码经 SwiftPM harness 全量编译通过（Xcode 本机受嵌套沙箱限制无法解析本地包，如实记录）；`scripts/verify.sh` 固定验证入口：BFAlgorithms 50 项 / BFKit 51 项 / AutoBeauty / App 类型检查全绿 |
 | 2026-11-06 | 工程约定：`AGENTS.md` 增加本地构建/验证命令常驻授权与良性沙箱提示说明；新增 `scripts/render_m8.sh` 固定 A/B 渲染入口；用户偏好改为中文汇报 |
+| 2026-11-17 | 修复大眼块状锯齿（用户反馈「按矩形范围拉伸、与周边齿错」）：①眼眶控制点沿闭合环弧长 6 倍加密（`FaceFeatureAdjuster.densifiedEyeRing`，位移线性插值），稀疏 8 点的近 Voronoi 块状插值剖面消除；②位移场网格 128 → 160 节点（眼区从 2-4 个节点升到 ~5 个，消除双线性 C0 折痕），求解耗时约 +25%；③修复 `WarpRenderer` 位移纹理采样坐标与场节点的半格系统性错位（shader 按节点对齐换算 uv，大图边缘差约 12px）。新增 3 项守护测试（眼环加密、位移上限方向保持、眼区剖面平滑性），BFAlgorithms 53 项全绿；`IMG_0789 --eye-size 0.8` 最小雅可比 0.507、强度 1.00、眼区目视无伪影 |
+| 2026-11-17 | 修复 App 切分类卡顿：BeautyEngine 惰性创建（`SessionState`，首次 load/render/export 在后台串行队列构造，不再随 `@State` autoclosure 在主线程反复构造）；body 拆分 `PreviewAreaView` / `ParameterPanelView`（切分类不再整体重建预览区）；文件读盘移后台（`loadFile`，安全作用域后台持有）；`SamplePortrait` 一次性缓存 + 后台生成；分类参数/色号定义表 `static let` 缓存。verify.sh 四项全绿 |

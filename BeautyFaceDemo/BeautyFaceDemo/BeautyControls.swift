@@ -83,128 +83,128 @@ enum BeautyCategory: String, CaseIterable, Identifiable {
     /// 美妆颜色定义。`MakeupColor` 不是 Float，无法复用
     /// `ParameterDefinition` 的 KeyPath 机制，因此用独立类型承载，
     /// 避免改动既有 20 条滑杆。
+    ///
+    /// 定义表用 `static let` 缓存：切分类时面板会重建并读取这些数组，
+    /// 每次求值都重新构造 23 个色板对象纯属浪费。
     var colorDefinitions: [MakeupColorDefinition] {
-        switch self {
-        case .makeup:
-            return [
-                .init("lipColor", "口红色号",
-                      \BeautyParameters.makeup.lipstickColor,
-                      defaultValue: .rose,
-                      swatches: [
-                        .init("rose", "玫瑰", .rose),
-                        .init("coral", "珊瑚", .coral),
-                        .init("pink", "蜜桃粉", MakeupColor(red: 0.92, green: 0.48, blue: 0.52)),
-                        .init("brick", "砖红", MakeupColor(red: 0.68, green: 0.20, blue: 0.18)),
-                        .init("berry", "浆果", MakeupColor(red: 0.55, green: 0.14, blue: 0.30)),
-                        .init("nude", "裸棕", MakeupColor(red: 0.72, green: 0.46, blue: 0.40))
-                      ]),
-                .init("blushColor", "腮红色号",
-                      \BeautyParameters.makeup.blushColor,
-                      defaultValue: .pinkBlush,
-                      swatches: [
-                        .init("pink", "粉桃", .pinkBlush),
-                        .init("apricot", "杏橘", .apricotBlush),
-                        .init("coral", "珊瑚", .coral),
-                        .init("rose", "玫瑰", .rose),
-                        .init("peach", "蜜桃", MakeupColor(red: 0.96, green: 0.70, blue: 0.58)),
-                        .init("plum", "梅子", MakeupColor(red: 0.74, green: 0.36, blue: 0.46))
-                      ]),
-                .init("browColor", "眉色",
-                      \BeautyParameters.makeup.browColor,
-                      defaultValue: .darkBrown,
-                      swatches: [
-                        .init("dark", "深棕", .darkBrown),
-                        .init("warm", "暖棕", .warmBrown),
-                        .init("earth", "大地", .earthShadow),
-                        .init("black", "黑", MakeupColor(red: 0.08, green: 0.07, blue: 0.07)),
-                        .init("ash", "灰棕", MakeupColor(red: 0.36, green: 0.32, blue: 0.30))
-                      ]),
-                .init("shadowColor", "眼影色号",
-                      \BeautyParameters.makeup.eyeshadowColor,
-                      defaultValue: .earthShadow,
-                      swatches: [
-                        .init("earth", "大地", .earthShadow),
-                        .init("warm", "暖棕", .warmBrown),
-                        .init("rose", "玫瑰", MakeupColor(red: 0.72, green: 0.44, blue: 0.46)),
-                        .init("plum", "梅子", MakeupColor(red: 0.52, green: 0.32, blue: 0.48)),
-                        .init("gold", "香槟金", MakeupColor(red: 0.82, green: 0.68, blue: 0.46)),
-                        .init("smoke", "烟灰", MakeupColor(red: 0.38, green: 0.36, blue: 0.40))
-                      ])
-            ]
-        default:
-            return []
-        }
+        Self.colorTable[self] ?? []
     }
 
+    /// 定义不可变且只读（KeyPath 非 Sendable 触发并发检查），声明为
+    /// nonisolated(unsafe) 以通过 Swift 6 严格并发检查。
+    private nonisolated(unsafe) static let colorTable: [BeautyCategory: [MakeupColorDefinition]] = [
+        .makeup: [
+            .init("lipColor", "口红色号",
+                  \BeautyParameters.makeup.lipstickColor,
+                  defaultValue: .rose,
+                  swatches: [
+                    .init("rose", "玫瑰", .rose),
+                    .init("coral", "珊瑚", .coral),
+                    .init("pink", "蜜桃粉", MakeupColor(red: 0.92, green: 0.48, blue: 0.52)),
+                    .init("brick", "砖红", MakeupColor(red: 0.68, green: 0.20, blue: 0.18)),
+                    .init("berry", "浆果", MakeupColor(red: 0.55, green: 0.14, blue: 0.30)),
+                    .init("nude", "裸棕", MakeupColor(red: 0.72, green: 0.46, blue: 0.40))
+                  ]),
+            .init("blushColor", "腮红色号",
+                  \BeautyParameters.makeup.blushColor,
+                  defaultValue: .pinkBlush,
+                  swatches: [
+                    .init("pink", "粉桃", .pinkBlush),
+                    .init("apricot", "杏橘", .apricotBlush),
+                    .init("coral", "珊瑚", .coral),
+                    .init("rose", "玫瑰", .rose),
+                    .init("peach", "蜜桃", MakeupColor(red: 0.96, green: 0.70, blue: 0.58)),
+                    .init("plum", "梅子", MakeupColor(red: 0.74, green: 0.36, blue: 0.46))
+                  ]),
+            .init("browColor", "眉色",
+                  \BeautyParameters.makeup.browColor,
+                  defaultValue: .darkBrown,
+                  swatches: [
+                    .init("dark", "深棕", .darkBrown),
+                    .init("warm", "暖棕", .warmBrown),
+                    .init("earth", "大地", .earthShadow),
+                    .init("black", "黑", MakeupColor(red: 0.08, green: 0.07, blue: 0.07)),
+                    .init("ash", "灰棕", MakeupColor(red: 0.36, green: 0.32, blue: 0.30))
+                  ]),
+            .init("shadowColor", "眼影色号",
+                  \BeautyParameters.makeup.eyeshadowColor,
+                  defaultValue: .earthShadow,
+                  swatches: [
+                    .init("earth", "大地", .earthShadow),
+                    .init("warm", "暖棕", .warmBrown),
+                    .init("rose", "玫瑰", MakeupColor(red: 0.72, green: 0.44, blue: 0.46)),
+                    .init("plum", "梅子", MakeupColor(red: 0.52, green: 0.32, blue: 0.48)),
+                    .init("gold", "香槟金", MakeupColor(red: 0.82, green: 0.68, blue: 0.46)),
+                    .init("smoke", "烟灰", MakeupColor(red: 0.38, green: 0.36, blue: 0.40))
+                  ])
+        ]
+    ]
+
     var parameters: [ParameterDefinition] {
-        switch self {
-        case .skin:
-            return [
-                .init("smoothing", "磨皮", \BeautyParameters.smoothing,
-                      defaultValue: 0.35, hint: "保边滤波，压平毛孔细纹"),
-                .init("whitening", "美白", \BeautyParameters.whitening,
-                      defaultValue: 0.25, hint: "淡化肤色不均"),
-                .init("brightening", "提亮", \BeautyParameters.brightening,
-                      defaultValue: 0.20, hint: "整体亮度，保留高光")
-            ]
-        case .retouch:
-            return [
-                .init("eyeBrightening", "亮眼", \BeautyParameters.eyeBrightening,
-                      defaultValue: 0.20, hint: "只提亮眼白"),
-                .init("teethWhitening", "白牙", \BeautyParameters.teethWhitening,
-                      defaultValue: 0.15, hint: "中和牙齿偏黄"),
-                .init("darkCircleRemoval", "去黑眼圈", \BeautyParameters.darkCircleRemoval,
-                      defaultValue: 0.25, hint: "眼下提亮校色"),
-                .init("blemishRemoval", "去痘印", \BeautyParameters.blemishRemoval,
-                      defaultValue: 0.30, hint: "小面积瑕疵修复")
-            ]
-        case .faceShape:
-            return [
-                .init("faceSize", "小脸", \BeautyParameters.faceShape.faceSize,
-                      defaultValue: 0.30, hint: "整圈轮廓内收"),
-                .init("jawSlim", "瘦脸", \BeautyParameters.faceShape.jawSlim,
-                      defaultValue: 0.25, hint: "下颌收窄"),
-                .init("faceNarrow", "窄脸", \BeautyParameters.faceShape.faceNarrow,
-                      defaultValue: 0.15, hint: "面颊收窄"),
-                .init("vShape", "V 脸", \BeautyParameters.faceShape.vShape,
-                      defaultValue: 0.20, hint: "下半张脸收窄"),
-                .init("chin", "下巴", \BeautyParameters.faceShape.chin,
-                      defaultValue: 0.15, hint: "加长并收窄"),
-                .init("forehead", "额头", \BeautyParameters.faceShape.forehead,
-                      defaultValue: 0.00, hint: "上段轮廓下压"),
-                .init("cheekbone", "颧骨", \BeautyParameters.faceShape.cheekbone,
-                      defaultValue: 0.10, hint: "颧骨区域收窄")
-            ]
-        case .features:
-            return [
-                .init("eyeSize", "大眼", \BeautyParameters.faceFeature.eyeSize,
-                      defaultValue: 0.25, hint: "眼裂纵向放大"),
-                .init("eyeDistance", "眼距", \BeautyParameters.faceFeature.eyeDistance,
-                      defaultValue: 0.00, hint: "双眼向鼻梁靠拢"),
-                .init("browSpacing", "眉间距", \BeautyParameters.faceFeature.browSpacing,
-                      defaultValue: 0.00, hint: "双眉向眉心靠拢"),
-                .init("browThickness", "眉毛浓度", \BeautyParameters.faceFeature.browThickness,
-                      defaultValue: 0.15, hint: "眉带纵向拉伸"),
-                .init("noseWidth", "鼻翼", \BeautyParameters.faceFeature.noseWidth,
-                      defaultValue: 0.15, hint: "鼻部向中轴收拢"),
-                .init("mouthShape", "微笑嘴型", \BeautyParameters.faceFeature.mouthShape,
-                      defaultValue: 0.20, hint: "嘴角上扬并收窄")
-            ]
-        case .makeup:
-            return [
-                .init("lipstick", "口红", \BeautyParameters.makeup.lipstick,
-                      defaultValue: 0.28, hint: "唇部着色，强度即着色权重上限"),
-                .init("blush", "腮红", \BeautyParameters.makeup.blush,
-                      defaultValue: 0.22, hint: "面颊晕染，边缘自动羽化"),
-                .init("brow", "眉毛加深", \BeautyParameters.makeup.brow,
-                      defaultValue: 0.18, hint: "沿眉形加深，不改变眉形"),
-                .init("eyeshadow", "眼影", \BeautyParameters.makeup.eyeshadow,
-                      defaultValue: 0.20, hint: "上眼睑晕染，避开眼球")
-            ]
-        case .presets:
-            return []
-        }
+        Self.parameterTable[self] ?? []
     }
+
+    private nonisolated(unsafe) static let parameterTable: [BeautyCategory: [ParameterDefinition]] = [
+        .skin: [
+            .init("smoothing", "磨皮", \BeautyParameters.smoothing,
+                  defaultValue: 0.35, hint: "保边滤波，压平毛孔细纹"),
+            .init("whitening", "美白", \BeautyParameters.whitening,
+                  defaultValue: 0.25, hint: "淡化肤色不均"),
+            .init("brightening", "提亮", \BeautyParameters.brightening,
+                  defaultValue: 0.20, hint: "整体亮度，保留高光")
+        ],
+        .retouch: [
+            .init("eyeBrightening", "亮眼", \BeautyParameters.eyeBrightening,
+                  defaultValue: 0.20, hint: "只提亮眼白"),
+            .init("teethWhitening", "白牙", \BeautyParameters.teethWhitening,
+                  defaultValue: 0.15, hint: "中和牙齿偏黄"),
+            .init("darkCircleRemoval", "去黑眼圈", \BeautyParameters.darkCircleRemoval,
+                  defaultValue: 0.25, hint: "眼下提亮校色"),
+            .init("blemishRemoval", "去痘印", \BeautyParameters.blemishRemoval,
+                  defaultValue: 0.30, hint: "小面积瑕疵修复")
+        ],
+        .faceShape: [
+            .init("faceSize", "小脸", \BeautyParameters.faceShape.faceSize,
+                  defaultValue: 0.30, hint: "整圈轮廓内收"),
+            .init("jawSlim", "瘦脸", \BeautyParameters.faceShape.jawSlim,
+                  defaultValue: 0.25, hint: "下颌收窄"),
+            .init("faceNarrow", "窄脸", \BeautyParameters.faceShape.faceNarrow,
+                  defaultValue: 0.15, hint: "面颊收窄"),
+            .init("vShape", "V 脸", \BeautyParameters.faceShape.vShape,
+                  defaultValue: 0.20, hint: "下半张脸收窄"),
+            .init("chin", "下巴", \BeautyParameters.faceShape.chin,
+                  defaultValue: 0.15, hint: "加长并收窄"),
+            .init("forehead", "额头", \BeautyParameters.faceShape.forehead,
+                  defaultValue: 0.00, hint: "上段轮廓下压"),
+            .init("cheekbone", "颧骨", \BeautyParameters.faceShape.cheekbone,
+                  defaultValue: 0.10, hint: "颧骨区域收窄")
+        ],
+        .features: [
+            .init("eyeSize", "大眼", \BeautyParameters.faceFeature.eyeSize,
+                  defaultValue: 0.25, hint: "眼裂纵向放大"),
+            .init("eyeDistance", "眼距", \BeautyParameters.faceFeature.eyeDistance,
+                  defaultValue: 0.00, hint: "双眼向鼻梁靠拢"),
+            .init("browSpacing", "眉间距", \BeautyParameters.faceFeature.browSpacing,
+                  defaultValue: 0.00, hint: "双眉向眉心靠拢"),
+            .init("browThickness", "眉毛浓度", \BeautyParameters.faceFeature.browThickness,
+                  defaultValue: 0.15, hint: "眉带纵向拉伸"),
+            .init("noseWidth", "鼻翼", \BeautyParameters.faceFeature.noseWidth,
+                  defaultValue: 0.15, hint: "鼻部向中轴收拢"),
+            .init("mouthShape", "微笑嘴型", \BeautyParameters.faceFeature.mouthShape,
+                  defaultValue: 0.20, hint: "嘴角上扬并收窄")
+        ],
+        .makeup: [
+            .init("lipstick", "口红", \BeautyParameters.makeup.lipstick,
+                  defaultValue: 0.28, hint: "唇部着色，强度即着色权重上限"),
+            .init("blush", "腮红", \BeautyParameters.makeup.blush,
+                  defaultValue: 0.22, hint: "面颊晕染，边缘自动羽化"),
+            .init("brow", "眉毛加深", \BeautyParameters.makeup.brow,
+                  defaultValue: 0.18, hint: "沿眉形加深，不改变眉形"),
+            .init("eyeshadow", "眼影", \BeautyParameters.makeup.eyeshadow,
+                  defaultValue: 0.20, hint: "上眼睑晕染，避开眼球")
+        ],
+        .presets: []
+    ]
 }
 
 /// 一个美妆色号（可点选的预设色）。

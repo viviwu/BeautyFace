@@ -20,6 +20,12 @@
 ///    加权上扬——嘴角抬得最多，唇中不动，形成微笑嘴型。
 ///
 /// 位移上限与脸型形变共用同一套逻辑（`applyDisplacementCap`）。
+///
+/// 控制点密度：眼眶在喂入 MLS 前沿**闭合环弧长加密**（每段 6 等分）。
+/// Vision 的眼眶只有 8 个开折线点，稀疏控制点之间的 MLS 插值剖面呈
+/// 近 Voronoi 分块，大眼时表现为「按矩形范围拉伸」的块状锯齿；加密后
+/// 眼缘被密集钉在径向剖面上，插值平滑（与脸型轮廓加密、场 B 轮廓锚
+/// 同一思路）。
 public struct FaceFeatureAdjuster: Sendable {
     /// 单点位移上限（相对该脸的轮廓高度），与脸型形变一致。
     public var maxDisplacementFraction: Float
@@ -42,25 +48,44 @@ public struct FaceFeatureAdjuster: Sendable {
         for face: FaceGeometry,
         parameters: FaceFeatureParameters
     ) -> [MLSSolver.ControlPoint] {
+        func isEyePoint(_ point: Point2) -> Bool {
+            face.leftEye.contains(where: { $0 == point })
+                || face.rightEye.contains(where: { $0 == point })
+        }
+        // 眼眶点单独处理（见 densifiedEyeRing），不进普通点列表
         var points: [Point2] = []
         points.reserveCapacity(face.allPoints.count)
         for point in face.allPoints
-        where !face.contour.contains(where: { $0 == point }) {
+        where !face.contour.contains(where: { $0 == point }) && !isEyePoint(point) {
             points.append(point)
         }
-        guard !points.isEmpty else { return [] }
+        let eyePoints = (face.leftEye + face.rightEye)
+            .filter { eye in !face.contour.contains(where: { $0 == eye }) }
+        guard !points.isEmpty || !eyePoints.isEmpty else { return [] }
         guard !parameters.isIdentity else {
-            return points.map { .anchor($0) }
+            return (points + eyePoints).map { .anchor($0) }
         }
 
         let displacementTable = Self.displacements(
             for: face,
             parameters: parameters
         )
+        var samplePoints: [Point2] = []
         var displacements: [Point2] = []
-        displacements.reserveCapacity(points.count)
+        samplePoints.reserveCapacity(points.count + eyePoints.count * 6)
+        displacements.reserveCapacity(points.count + eyePoints.count * 6)
         for point in points {
+            samplePoints.append(point)
             displacements.append(displacementTable[point] ?? .zero)
+        }
+        for eye in [face.leftEye, face.rightEye] {
+            for sample in Self.densifiedEyeRing(
+                eye,
+                displacementTable: displacementTable
+            ) {
+                samplePoints.append(sample.point)
+                displacements.append(sample.displacement)
+            }
         }
         // 位移上限与倍率复用脸型的实现
         FaceShapeAdjuster(
@@ -69,9 +94,42 @@ public struct FaceFeatureAdjuster: Sendable {
         )
         .applyDisplacementCap(&displacements, metrics: FaceMetrics(face))
 
-        return zip(points, displacements).map {
+        return zip(samplePoints, displacements).map {
             MLSSolver.ControlPoint(output: $0.0 + $0.1, source: $0.0)
         }
+    }
+
+    // MARK: - 眼眶加密
+
+    /// 眼眶闭合环沿弧长加密：每段插 `subdivisions` 个点（含段起点），
+    /// 末段从末点绕回首点补闭合；位移沿段线性插值。
+    ///
+    /// 眼眶点位移由 `displacements(for:parameters:)` 按原图坐标索引；
+    /// 插值点的位移取两端点位移的线性插值——大眼径向外移与眼距整体
+    /// 平移沿眼环都是（近似）线性变化的，线性插值不引入剖面失真。
+    static func densifiedEyeRing(
+        _ eye: [Point2],
+        displacementTable: [Point2: Point2],
+        subdivisions: Int = 6
+    ) -> [(point: Point2, displacement: Point2)] {
+        guard !eye.isEmpty else { return [] }
+        guard eye.count > 1 else {
+            let point = eye[0]
+            return [(point, displacementTable[point] ?? .zero)]
+        }
+        var result: [(point: Point2, displacement: Point2)] = []
+        result.reserveCapacity(eye.count * subdivisions)
+        for index in 0..<eye.count {
+            let from = eye[index]
+            let to = eye[(index + 1) % eye.count]
+            let fromD = displacementTable[from] ?? .zero
+            let toD = displacementTable[to] ?? .zero
+            for step in 0..<subdivisions {
+                let t = Float(step) / Float(subdivisions)
+                result.append((from + (to - from) * t, fromD + (toD - fromD) * t))
+            }
+        }
+        return result
     }
 
     // MARK: - 位移计算

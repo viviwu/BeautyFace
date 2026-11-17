@@ -333,7 +333,11 @@ public struct DisplacementField {
 
     public struct Config: Sendable {
         /// 网格沿长边的节点数。
-        public var gridLongEdge: Int = 128
+        ///
+        /// 160：3088px 图上节距约 19px。128 时眼区（眼高 50-80px）只覆盖
+        /// 2-4 个节点，双线性放大在网格线上产生 C0 折痕，是大眼锯齿的
+        /// 主因之一。求解耗时约 +25%，实测可接受。
+        public var gridLongEdge: Int = 160
         /// 单点位移上限（相对脸高）。
         public var maxDisplacementFraction: Float = 0.10
         /// 全局位移倍率。
@@ -380,7 +384,7 @@ public struct DisplacementField {
         /// 大面积形变（台账 3.7）。新增字段必须同步改这里的默认参数，
         /// `BodyCoordinationTests.testConfigDefaultsMatchExplicitInit` 会守护。
         public init(
-            gridLongEdge: Int = 128,
+            gridLongEdge: Int = 160,
             maxDisplacementFraction: Float = 0.10,
             displacementScale: Float = 1,
             falloffInnerFactor: Float = 0.15,

@@ -46,6 +46,7 @@ public final class WarpRenderer {
         texture2d<float, access::sample> source [[texture(0)]],
         texture2d<float, access::sample> displacement [[texture(1)]],
         texture2d<float, access::write> output [[texture(2)]],
+        constant uint2 &gridSize [[buffer(0)]],
         uint2 gid [[thread_position_in_grid]]
     ) {
         if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
@@ -53,13 +54,27 @@ public final class WarpRenderer {
         }
 
         float2 size = float2(output.get_width(), output.get_height());
+        float2 gsize = float2(gridSize);
         constexpr sampler sampler2d(
             coord::normalized,
             filter::linear,
             address::clamp_to_edge
         );
 
-        float2 uv = (float2(gid) + 0.5) / size;
+        // 采样点与位移场节点严格对齐。场节点 (col,row) 位于像素
+        // col*(W-1)/(C-1)、row*(H-1)/(R-1)（见 DisplacementField.sampleOffsets）。
+        // 把输出像素中心换算成连续网格坐标，再映射到纹素中心归一化坐标；
+        // 直接用 (gid+0.5)/size 会有半格系统性偏移，位移被非均匀重映射
+        //（大图边缘差可达 ~10px，放大眼区等小特征处的错位）。
+        float sx = (float(gid.x) + 0.5) * (gsize.x - 1.0) / (size.x - 1.0);
+        // row 0 = 图像下沿（y 向上）；上传时已按行倒序，纹理行 tr 存场行
+        // R-1-tr，光栅 y 先翻成 y 向上再换算。
+        float sy = (size.y - (float(gid.y) + 0.5)) * (gsize.y - 1.0) / (size.y - 1.0);
+        float2 uv = float2(
+            (sx + 0.5) / gsize.x,
+            (gsize.y - 0.5 - sy) / gsize.y
+        );
+
         // 位移场在粗网格上求解、此处双线性放大，本身就是平滑场
         float2 offset = displacement.sample(sampler2d, uv).xy;
         // 源位置 = 输出像素 + 位移；位移以像素为单位
@@ -146,6 +161,16 @@ public final class WarpRenderer {
         encoder.setTexture(source, index: 0)
         encoder.setTexture(displacement, index: 1)
         encoder.setTexture(output, index: 2)
+        // 网格尺寸供 shader 换算节点对齐的采样坐标（见 shaderSource 注释）
+        var gridSize = SIMD2<UInt32>(
+            UInt32(field.columns),
+            UInt32(field.rows)
+        )
+        encoder.setBytes(
+            &gridSize,
+            length: MemoryLayout<SIMD2<UInt32>>.stride,
+            index: 0
+        )
 
         let threadWidth = pipeline.threadExecutionWidth
         let threadHeight = max(

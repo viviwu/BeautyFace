@@ -13,7 +13,13 @@ enum SamplePortrait {
     static let width = 900
     static let height = 1200
 
-    static func makeData() -> Data? {
+    /// 一次性生成并缓存：绘制 + PNG 编码较重，App 生命周期内内容不变，
+    /// 重复生成没有意义。static let 惰性求值且线程安全。
+    private static let cached: Data? = makeDataUncached()
+
+    static func makeData() -> Data? { cached }
+
+    private static func makeDataUncached() -> Data? {
         guard let image = makeImage(),
               let output = CFDataCreateMutable(nil, 0),
               let destination = CGImageDestinationCreateWithData(

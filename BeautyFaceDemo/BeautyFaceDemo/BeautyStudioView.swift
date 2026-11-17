@@ -19,11 +19,14 @@ struct BeautyStudioView: View {
             HStack(spacing: 0) {
                 categorySidebar
                 Divider()
-                previewArea
+                // 预览区与参数面板拆成独立视图：@Observable 按访问追踪
+                // 失效范围，切分类只重建侧栏高亮与面板，不再整体重建
+                // 预览区（两张大图的 Image 层级）。
+                PreviewAreaView(model: model)
             }
             .frame(maxHeight: .infinity)
             Divider()
-            parameterPanel
+            ParameterPanelView(model: model)
         }
         #if os(macOS)
         .frame(minWidth: 1040, minHeight: 780)
@@ -44,14 +47,8 @@ struct BeautyStudioView: View {
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                do {
-                    let data = try Data(contentsOf: url)
-                    model.load(data: data, name: url.lastPathComponent)
-                } catch {
-                    pickerError = error.localizedDescription
-                }
+                // 大图读盘放后台队列，主线程不阻塞
+                model.loadFile(at: url, name: url.lastPathComponent)
             case .failure(let error):
                 pickerError = error.localizedDescription
             }
@@ -215,7 +212,28 @@ struct BeautyStudioView: View {
         .background(Color.secondary.opacity(0.06))
     }
 
-    // MARK: - 预览区
+    // MARK: - 图片载入
+
+    @MainActor
+    private func loadFromPhotos(_ item: PhotosPickerItem?) async {
+        guard let item else { return }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                pickerError = "这张照片无法读取，请换一张"
+                return
+            }
+            model.load(data: data, name: "相册照片")
+        } catch {
+            pickerError = error.localizedDescription
+        }
+    }
+}
+
+/// 中央预览区：整图 / 分割对比 / 状态信息。独立成 struct 后，@Observable
+/// 按访问追踪失效——切分类（selectedCategory 变化）不再整体重建预览层。
+private struct PreviewAreaView: View {
+    // @Bindable：提供 $model.xxx 绑定（原主视图由 @State 投影）
+    @Bindable var model: BeautyStudioModel
 
     private var displayImage: CGImage? {
         model.showingOriginal
@@ -272,7 +290,7 @@ struct BeautyStudioView: View {
         .padding(18)
     }
 
-    private var previewArea: some View {
+    var body: some View {
         ZStack {
             Color.secondary.opacity(0.08)
 
@@ -353,10 +371,15 @@ struct BeautyStudioView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
 
-    // MARK: - 底部参数面板
+/// 底部参数面板：标题行 + 随分类变化的滑杆 / 色号 / 预设卡。独立成 struct
+/// 后，只有读取 selectedCategory 的面板会随切分类重建，滑杆控件本身
+/// 仅依赖 parameters 与本分类定义表（static let 缓存，构建开销极小）。
+private struct ParameterPanelView: View {
+    let model: BeautyStudioModel
 
-    private var parameterPanel: some View {
+    var body: some View {
         let category = model.selectedCategory
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
@@ -482,22 +505,6 @@ struct BeautyStudioView: View {
         case .natural: return "leaf"
         case .refined: return "sparkles"
         case .custom: return "slider.horizontal.3"
-        }
-    }
-
-    // MARK: - 图片载入
-
-    @MainActor
-    private func loadFromPhotos(_ item: PhotosPickerItem?) async {
-        guard let item else { return }
-        do {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
-                pickerError = "这张照片无法读取，请换一张"
-                return
-            }
-            model.load(data: data, name: "相册照片")
-        } catch {
-            pickerError = error.localizedDescription
         }
     }
 }

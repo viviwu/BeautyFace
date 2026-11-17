@@ -77,6 +77,33 @@ private final class BeautySession: @unchecked Sendable {
     }
 }
 
+/// 引擎持有者的线程安全盒子：`ensure()` 只应在串行工作队列上调用，
+/// 首次调用构造 BeautyEngine（3 个 Metal renderer），结果缓存后复用。
+private final class SessionState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var session: BeautySession?
+    private var failureMessage: String?
+
+    var current: (session: BeautySession?, error: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (session, failureMessage)
+    }
+
+    func ensure() -> (session: BeautySession?, error: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        if session == nil, failureMessage == nil {
+            do {
+                session = BeautySession(engine: try BeautyEngine())
+            } catch {
+                failureMessage = "Metal 不可用：\(error.localizedDescription)。仍可查看照片，但美化功能已停用。"
+            }
+        }
+        return (session, failureMessage)
+    }
+}
+
 @MainActor
 @Observable
 final class BeautyStudioModel {
@@ -101,20 +128,18 @@ final class BeautyStudioModel {
     private(set) var engineUnavailable: String?
     private(set) var exportURL: URL?
 
-    private let session: BeautySession?
+    /// 引擎惰性创建：BeautyEngine 会构造 3 个 Metal renderer，构造一次
+    /// 的开销不可忽略；View 的 `@State` autoclosure 在每次视图重建时都会
+    /// 求值，若在 init 里建引擎，就会在主线程上反复付出这笔开销。
+    /// 现在改为首次真正用到（load / render / export）时在后台串行队列上
+    /// 创建一次，之后复用。sessionState 只在 `queue` 上访问。
+    private let sessionState = SessionState()
     private let queue = DispatchQueue(label: "com.vivi.BeautyFace.session", qos: .userInitiated)
     private var sourceData: Data?
     private var generation = 0
     private var pendingRender: DispatchWorkItem?
 
-    init() {
-        do {
-            session = BeautySession(engine: try BeautyEngine())
-        } catch {
-            session = nil
-            engineUnavailable = "Metal 不可用：\(error.localizedDescription)。仍可查看照片，但美化功能已停用。"
-        }
-    }
+    init() {}
 
     // MARK: - 图片来源
 
@@ -124,12 +149,40 @@ final class BeautyStudioModel {
             load(data: data)
             return
         }
-        guard let data = SamplePortrait.makeData() else {
-            errorMessage = "无法生成内置示例图"
-            return
+        // 程序化示意人像的绘制 + PNG 编码较重（数千次绘制调用），
+        // 且首次生成后内容不变，放到后台执行并缓存（SamplePortrait 内部
+        // 有 static let 缓存，重复调用零开销），主线程只回调赋值。
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let data = SamplePortrait.makeData() else {
+                DispatchQueue.main.async {
+                    self?.errorMessage = "无法生成内置示例图"
+                }
+                return
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.sourceName = "内置示意人像"
+                self.load(data: data)
+            }
         }
-        sourceName = "内置示意人像"
-        load(data: data)
+    }
+
+    /// 从文件载入：`Data(contentsOf:)` 对大 HEIC 可达数十 MB，主线程同步
+    /// 读会卡住切换动画；安全作用域在后台读取期间持有，读完即释放。
+    func loadFile(at url: URL, name: String) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        queue.async { [weak self] in
+            let data = try? Data(contentsOf: url)
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let data, !data.isEmpty else {
+                    self.errorMessage = "无法读取这张图片文件"
+                    return
+                }
+                self.load(data: data, name: name)
+            }
+        }
     }
 
     /// 优先使用 scripts/install_default_portrait.sh 放进 bundle 的真实人像。
@@ -175,25 +228,31 @@ final class BeautyStudioModel {
         // 作废上一张照片尚未回传的渲染结果，避免旧画面覆盖新照片。
         generation += 1
 
-        guard let session else {
-            statusMessage = engineUnavailable ?? "美化引擎不可用"
-            // 没有 Metal 时仍解码并显示原图，而不是停留在空白页。
-            if let decoded = try? ImageDecoder.decode(
-                data: data,
-                maxLongEdge: BeautyQuality.preview.maxLongEdge
-            ) {
-                originalImage = decoded.image
-                previewImage = decoded.image
-            }
-            return
-        }
-
         isAnalyzing = true
         statusMessage = "正在分析照片…"
         queue.async { [weak self] in
+            guard let self else { return }
+            // 引擎首次在此惰性创建（后台队列，不阻塞主线程）
+            let prepared = self.sessionState.ensure()
+            if let error = prepared.error {
+                DispatchQueue.main.async {
+                    self.engineUnavailable = error
+                    self.isAnalyzing = false
+                    self.statusMessage = error
+                    // 没有 Metal 时仍解码并显示原图，而不是停留在空白页。
+                    if let decoded = try? ImageDecoder.decode(
+                        data: data,
+                        maxLongEdge: BeautyQuality.preview.maxLongEdge
+                    ) {
+                        self.originalImage = decoded.image
+                        self.previewImage = decoded.image
+                    }
+                }
+                return
+            }
+            guard let session = prepared.session else { return }
             let outcome = session.prepare(data: data, quality: .preview)
             DispatchQueue.main.async {
-                guard let self else { return }
                 self.isAnalyzing = false
                 guard let outcome else {
                     self.errorMessage = "无法解码这张图片，请换一张 HEIC / JPEG / PNG"
@@ -292,18 +351,26 @@ final class BeautyStudioModel {
     }
 
     private func renderPreview() {
-        guard let session else {
-            previewImage = originalImage
-            return
-        }
         generation += 1
         let token = generation
         let snapshot = parameters
         isRendering = true
         queue.async { [weak self] in
+            guard let self else { return }
+            let prepared = self.sessionState.ensure()
+            if let error = prepared.error {
+                DispatchQueue.main.async {
+                    guard self.generation == token else { return }
+                    self.isRendering = false
+                    self.engineUnavailable = error
+                    self.previewImage = self.originalImage
+                }
+                return
+            }
+            guard let session = prepared.session else { return }
             let outcome = session.render(snapshot)
             DispatchQueue.main.async {
-                guard let self, self.generation == token else { return }
+                guard self.generation == token else { return }
                 self.isRendering = false
                 self.lastRenderMilliseconds = outcome.milliseconds
                 if let image = outcome.image {
@@ -319,10 +386,19 @@ final class BeautyStudioModel {
     // MARK: - 导出
 
     func prepareExport() {
-        guard let session, let data = sourceData else { return }
+        guard let data = sourceData else { return }
         isExporting = true
         let snapshot = parameters
         queue.async { [weak self] in
+            guard let self else { return }
+            let prepared = self.sessionState.ensure()
+            guard let session = prepared.session else {
+                DispatchQueue.main.async {
+                    self.isExporting = false
+                    self.engineUnavailable = prepared.error ?? "美化引擎不可用"
+                }
+                return
+            }
             let png = session.export(data: data, parameters: snapshot)
             var url: URL?
             if let png {
@@ -332,7 +408,6 @@ final class BeautyStudioModel {
                 url = target
             }
             DispatchQueue.main.async {
-                guard let self else { return }
                 self.isExporting = false
                 if let url {
                     self.exportURL = url
